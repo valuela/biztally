@@ -41,8 +41,13 @@ export async function createInventoryItem(formData: FormData) {
   const inventoryType = String(formData.get("inventory_type") ?? "").trim();
   const unit = String(formData.get("unit") ?? "").trim();
   const brandName = String(formData.get("brand_name") ?? "").trim();
-  const supplierName = String(formData.get("supplier_name") ?? "").trim();
+  const vendorId = String(formData.get("vendor_id") ?? "").trim();
+  const batchCode = String(formData.get("batch_code") ?? "").trim();
   const imageFile = formData.get("image_file");
+  const packagesReceivedRaw = String(formData.get("packages_received") ?? "").trim();
+  const packagesReceived = packagesReceivedRaw === "" ? null : parseNumber(packagesReceivedRaw);
+  const packageSizeRaw = String(formData.get("package_size") ?? "").trim();
+  const packageSize = packageSizeRaw === "" ? null : parseNumber(packageSizeRaw);
   const quantityOnHand = parseNumber(formData.get("quantity_on_hand"));
   const costPerUnit = parseNumber(formData.get("cost_per_unit"));
   const purchasePriceRaw = String(formData.get("purchase_price") ?? "").trim();
@@ -56,12 +61,28 @@ export async function createInventoryItem(formData: FormData) {
     fail("Fill in the required fields before saving.");
   }
 
-  if (Number.isNaN(purchasePrice) || Number.isNaN(lowStockThreshold)) {
-    fail("Enter valid numbers for purchase price and low stock threshold.");
+  if (Number.isNaN(packagesReceived) || Number.isNaN(packageSize) || Number.isNaN(purchasePrice) || Number.isNaN(lowStockThreshold)) {
+    fail("Enter valid numbers for package details, purchase price, and low stock threshold.");
   }
 
   if (!["raw_material", "packaging", "finished_product", "supply"].includes(inventoryType)) {
     fail("Choose a valid inventory type.");
+  }
+
+  let vendorName: string | null = null;
+  if (vendorId) {
+    const { data: vendor, error: vendorError } = await supabase
+      .from("vendors")
+      .select("id, name")
+      .eq("id", vendorId)
+      .eq("business_id", businessId)
+      .maybeSingle();
+
+    if (vendorError || !vendor) {
+      fail("Choose a valid vendor.");
+    }
+
+    vendorName = vendor.name;
   }
 
   let imageUrl: string | null = null;
@@ -89,10 +110,12 @@ export async function createInventoryItem(formData: FormData) {
       barcode: barcode || null,
       image_url: imageUrl,
       brand_name: brandName || null,
-      supplier_name: supplierName || null,
-      purchase_price: purchasePrice,
+      supplier_name: null,
+      purchase_price: null,
       inventory_type: inventoryType,
       unit,
+      default_package_size: packageSize,
+      default_package_unit: unit,
       quantity_on_hand: quantityOnHand,
       cost_per_unit: costPerUnit,
       low_stock_threshold: lowStockThreshold,
@@ -114,6 +137,34 @@ export async function createInventoryItem(formData: FormData) {
   }
 
   if (quantityOnHand > 0) {
+    const { data: batch, error: batchError } = await supabase
+      .from("inventory_batches")
+      .insert({
+        business_id: businessId,
+        inventory_item_id: item.id,
+        batch_code: batchCode || null,
+        vendor_id: vendorId || null,
+        supplier_name: vendorName,
+        purchase_price: purchasePrice,
+        cost_per_unit: costPerUnit,
+        packages_received: packagesReceived,
+        package_size: packageSize,
+        package_unit: unit,
+        quantity_received: quantityOnHand,
+        quantity_remaining: quantityOnHand,
+        expiration_date: expirationDateRaw || null,
+        received_at: new Date().toISOString().slice(0, 10),
+        notes: notes || null,
+        created_by: user.id,
+      })
+      .select("id")
+      .single();
+
+    if (batchError || !batch) {
+      await supabase.from("inventory_items").delete().eq("id", item.id);
+      fail(batchError?.message || "Saved the item, but the initial stock batch failed.");
+    }
+
     const { error: movementError } = await supabase.from("inventory_movements").insert({
       business_id: businessId,
       inventory_item_id: item.id,
@@ -122,16 +173,17 @@ export async function createInventoryItem(formData: FormData) {
       previous_quantity: 0,
       new_quantity: quantityOnHand,
       reason: "Initial stock",
-      reference_type: "inventory_item",
-      reference_id: item.id,
+      reference_type: "inventory_batch",
+      reference_id: batch.id,
       created_by: user.id,
     });
 
     if (movementError) {
+      await supabase.from("inventory_items").delete().eq("id", item.id);
       fail(movementError.message || "Saved the item, but the stock movement failed.");
     }
   }
 
   revalidatePath("/inventory");
-  redirect("/inventory");
+  redirect(`/inventory?success=${encodeURIComponent(`${name} was added to inventory.`)}`);
 }

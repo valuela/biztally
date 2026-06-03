@@ -8,6 +8,7 @@ import {
   Filter,
   Layers3,
   Package2,
+  PackagePlus,
   ScanBarcode,
   Search,
   Sparkles,
@@ -35,16 +36,29 @@ type InventoryRow = {
   barcode: string | null;
   image_url: string | null;
   brand_name: string | null;
-  supplier_name: string | null;
-  purchase_price: string | number | null;
   inventory_type: InventoryType;
   unit: string;
+  default_package_size: string | number | null;
+  default_package_unit: string | null;
   quantity_on_hand: string | number;
   cost_per_unit: string | number;
   low_stock_threshold: string | number | null;
   expiration_date: string | null;
   notes: string | null;
   updated_at: string;
+};
+
+type InventoryBatchRow = {
+  id: string;
+  inventory_item_id: string;
+  batch_code: string | null;
+  supplier_name: string | null;
+  purchase_price: string | number | null;
+  cost_per_unit: string | number;
+  quantity_received: string | number;
+  quantity_remaining: string | number;
+  expiration_date: string | null;
+  received_at: string;
 };
 
 type InventoryMovementRow = {
@@ -102,8 +116,27 @@ function formatMoney(value: string | number, currency = "PHP") {
   }
 }
 
-function getStatus(item: InventoryRow): InventoryStatus {
-  const onHand = toNumber(item.quantity_on_hand);
+function formatPhilippineDateTime(value: string | null | undefined) {
+  if (!value) return "Not set";
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-PH", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+function getStatus(item: InventoryRow, stock = toNumber(item.quantity_on_hand)): InventoryStatus {
+  const onHand = stock;
   const threshold = toNumber(item.low_stock_threshold);
 
   if (onHand <= 0) return "Out of stock";
@@ -118,8 +151,8 @@ function toneForStock(status: InventoryStatus): "success" | "warning" | "danger"
   return "neutral";
 }
 
-function progressForItem(item: InventoryRow) {
-  const onHand = toNumber(item.quantity_on_hand);
+function progressForItem(item: InventoryRow, stock = toNumber(item.quantity_on_hand)) {
+  const onHand = stock;
   const threshold = toNumber(item.low_stock_threshold);
   const target = threshold > 0 ? threshold * 2 : Math.max(onHand, 1);
   return Math.max(0, Math.min(100, (onHand / target) * 100));
@@ -166,15 +199,21 @@ export default async function InventoryPage() {
   const businessCurrency = ownedBusiness?.currency ?? "PHP";
 
   let items: InventoryRow[] = [];
+  let batches: InventoryBatchRow[] = [];
   let recentMovements: InventoryMovementRow[] = [];
 
   if (businessId) {
-    const [{ data: inventoryRows }, { data: movementRows }] = await Promise.all([
+    const [{ data: inventoryRows }, { data: batchRows }, { data: movementRows }] = await Promise.all([
       supabase
         .from("inventory_items")
-        .select("id, name, barcode, image_url, brand_name, supplier_name, purchase_price, inventory_type, unit, quantity_on_hand, cost_per_unit, low_stock_threshold, expiration_date, notes, updated_at")
+        .select("id, name, barcode, image_url, brand_name, inventory_type, unit, default_package_size, default_package_unit, quantity_on_hand, cost_per_unit, low_stock_threshold, expiration_date, notes, updated_at")
         .eq("business_id", businessId)
         .order("updated_at", { ascending: false }),
+      supabase
+        .from("inventory_batches")
+        .select("id, inventory_item_id, batch_code, supplier_name, purchase_price, cost_per_unit, quantity_received, quantity_remaining, expiration_date, received_at")
+        .eq("business_id", businessId)
+        .order("expiration_date", { ascending: true, nullsFirst: false }),
       supabase
         .from("inventory_movements")
         .select("id, movement_type, quantity, reason, created_at")
@@ -184,21 +223,45 @@ export default async function InventoryPage() {
     ]);
 
     items = inventoryRows ?? [];
+    batches = batchRows ?? [];
     recentMovements = movementRows ?? [];
   }
 
+  const batchesByItem = batches.reduce<Record<string, InventoryBatchRow[]>>((grouped, batch) => {
+    grouped[batch.inventory_item_id] = grouped[batch.inventory_item_id] ?? [];
+    grouped[batch.inventory_item_id].push(batch);
+    return grouped;
+  }, {});
+
+  function itemBatches(itemId: string) {
+    return batchesByItem[itemId] ?? [];
+  }
+
+  function stockOnHand(item: InventoryRow) {
+    const itemStock = itemBatches(item.id).reduce((total, batch) => total + toNumber(batch.quantity_remaining), 0);
+    return itemStock > 0 ? itemStock : toNumber(item.quantity_on_hand);
+  }
+
+  function latestBatch(item: InventoryRow) {
+    return [...itemBatches(item.id)].sort((a, b) => b.received_at.localeCompare(a.received_at))[0] ?? null;
+  }
+
+  function nextExpiringBatch(item: InventoryRow) {
+    return itemBatches(item.id).find((batch) => toNumber(batch.quantity_remaining) > 0 && batch.expiration_date) ?? null;
+  }
+
   const totalItems = items.length;
-  const lowStockItems = items.filter((item) => getStatus(item) !== "In stock").length;
+  const lowStockItems = items.filter((item) => getStatus(item, stockOnHand(item)) !== "In stock").length;
   const barcodeReady = items.filter((item) => Boolean(item.barcode)).length;
   const ingredients = items.filter((item) => item.inventory_type === "raw_material").length;
 
   const lowStockQueue = items
-    .filter((item) => getStatus(item) !== "In stock")
+    .filter((item) => getStatus(item, stockOnHand(item)) !== "In stock")
     .slice(0, 3)
     .map((item) => ({
       name: item.name,
-      qty: `${formatStock(toNumber(item.quantity_on_hand))} ${item.unit}`,
-      urgency: getStatus(item) === "Out of stock" ? "Critical" : "High",
+      qty: `${formatStock(stockOnHand(item))} ${item.unit}`,
+      urgency: getStatus(item, stockOnHand(item)) === "Out of stock" ? "Critical" : "High",
     }));
 
   return (
@@ -216,6 +279,13 @@ export default async function InventoryPage() {
               <ScanBarcode size={16} />
               Scan barcode
             </Button>
+            <Link
+              href="/inventory/receive"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-4 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-alt)]"
+            >
+              <PackagePlus size={16} />
+              Receive stock
+            </Link>
             <Link
               href="/inventory/new"
               className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[var(--border)] !bg-[var(--primary)] px-4 text-sm font-medium !text-white transition-colors hover:!bg-[var(--primary-hover)]"
@@ -319,10 +389,13 @@ export default async function InventoryPage() {
                     </THead>
                     <TBody>
                       {items.map((item) => {
-                        const status = getStatus(item);
+                        const stock = stockOnHand(item);
+                        const status = getStatus(item, stock);
                         const meta = typeMeta[item.inventory_type];
                         const Icon = meta.icon;
-                        const progress = progressForItem(item);
+                        const progress = progressForItem(item, stock);
+                        const latest = latestBatch(item);
+                        const nextExpiry = nextExpiringBatch(item);
 
                         return (
                           <TR key={item.id}>
@@ -348,6 +421,11 @@ export default async function InventoryPage() {
                                   <p className="mt-1 text-xs text-[var(--muted)]">
                                     {item.barcode ? `Barcode ${item.barcode}` : "No barcode yet"}
                                   </p>
+                                  <p className="mt-1 text-xs text-[var(--muted)]">
+                                    {item.default_package_size
+                                      ? `${formatStock(toNumber(item.default_package_size))} ${item.default_package_unit ?? item.unit} per pack`
+                                      : "Package size not set"}
+                                  </p>
                                   <div className="mt-2 h-1.5 w-40 rounded-full bg-[var(--surface-alt)]">
                                     <div
                                       className={cn(
@@ -370,7 +448,7 @@ export default async function InventoryPage() {
                             <TD>
                               <div>
                                 <p className="font-medium">
-                                  {formatStock(toNumber(item.quantity_on_hand))} {item.unit}
+                                  {formatStock(stock)} {item.unit}
                                 </p>
                                 <p className="mt-1 text-xs text-[var(--muted)]">
                                   Min {formatStock(toNumber(item.low_stock_threshold))} {item.unit}
@@ -381,18 +459,23 @@ export default async function InventoryPage() {
                               <div>
                                 <p className="font-medium">{formatMoney(item.cost_per_unit, businessCurrency)}</p>
                                 <p className="mt-1 text-xs text-[var(--muted)]">
-                                  Bought {item.purchase_price != null ? formatMoney(item.purchase_price, businessCurrency) : "not set"}
+                                  Bought {latest?.purchase_price != null ? formatMoney(latest.purchase_price, businessCurrency) : "not set"}
                                 </p>
                               </div>
                             </TD>
                             <TD className="max-w-[180px] truncate text-sm text-[var(--muted)]">
-                              {item.supplier_name ?? "No supplier yet"}
+                              <div>
+                                <p className="truncate">{latest?.supplier_name ?? "No supplier yet"}</p>
+                                <p className="mt-1 text-xs">
+                                  {nextExpiry?.expiration_date ? `Expires ${nextExpiry.expiration_date}` : "No expiry tracked"}
+                                </p>
+                              </div>
                             </TD>
                             <TD>
                               <StatusBadge label={status} tone={toneForStock(status)} />
                             </TD>
                             <TD>
-                              <div className="text-sm text-[var(--muted)]">{item.updated_at}</div>
+                              <div className="text-sm text-[var(--muted)]">{formatPhilippineDateTime(item.updated_at)}</div>
                             </TD>
                             <TD>
                               <div className="flex flex-wrap gap-2">
@@ -417,10 +500,13 @@ export default async function InventoryPage() {
 
                 <div className="space-y-3 md:hidden">
                   {items.map((item) => {
-                    const status = getStatus(item);
+                    const stock = stockOnHand(item);
+                    const status = getStatus(item, stock);
                     const meta = typeMeta[item.inventory_type];
                     const Icon = meta.icon;
-                    const progress = progressForItem(item);
+                    const progress = progressForItem(item, stock);
+                    const latest = latestBatch(item);
+                    const nextExpiry = nextExpiringBatch(item);
 
                     return (
                       <Card key={item.id} className="shadow-none">
@@ -448,6 +534,11 @@ export default async function InventoryPage() {
                                 <p className="mt-1 text-xs text-[var(--muted)]">
                                   {item.barcode ? `Barcode ${item.barcode}` : "No barcode yet"}
                                 </p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {item.default_package_size
+                                    ? `${formatStock(toNumber(item.default_package_size))} ${item.default_package_unit ?? item.unit} per pack`
+                                    : "Package size not set"}
+                                </p>
                               </div>
                             </div>
                             <StatusBadge label={status} tone={toneForStock(status)} />
@@ -471,7 +562,7 @@ export default async function InventoryPage() {
                             <div>
                               <p className="text-xs text-[var(--muted)]">Stock</p>
                               <p className="font-medium">
-                                {formatStock(toNumber(item.quantity_on_hand))} {item.unit}
+                                {formatStock(stock)} {item.unit}
                               </p>
                             </div>
                             <div>
@@ -480,13 +571,17 @@ export default async function InventoryPage() {
                             </div>
                             <div>
                               <p className="text-xs text-[var(--muted)]">Bought from</p>
-                              <p className="truncate font-medium">{item.supplier_name ?? "Not set"}</p>
+                              <p className="truncate font-medium">{latest?.supplier_name ?? "Not set"}</p>
                             </div>
                             <div>
                               <p className="text-xs text-[var(--muted)]">Purchase price</p>
                               <p className="font-medium">
-                                {item.purchase_price != null ? formatMoney(item.purchase_price, businessCurrency) : "Not set"}
+                                {latest?.purchase_price != null ? formatMoney(latest.purchase_price, businessCurrency) : "Not set"}
                               </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-[var(--muted)]">Next expiry</p>
+                              <p className="font-medium">{nextExpiry?.expiration_date ?? "Not tracked"}</p>
                             </div>
                           </div>
 
@@ -659,7 +754,7 @@ export default async function InventoryPage() {
                         </div>
                         <div className="text-right">
                           <p className="text-sm font-medium">{formatStock(toNumber(movement.quantity))}</p>
-                          <p className="text-xs text-[var(--muted)]">{movement.created_at}</p>
+                          <p className="text-xs text-[var(--muted)]">{formatPhilippineDateTime(movement.created_at)}</p>
                         </div>
                       </div>
                     ))}
