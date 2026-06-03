@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Camera, PackagePlus, ScanBarcode, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
-import { NotFoundException } from "@zxing/library";
+import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,6 +26,16 @@ type VendorOption = {
   name: string;
 };
 
+const retailBarcodeFormats = [
+  BarcodeFormat.EAN_13,
+  BarcodeFormat.EAN_8,
+  BarcodeFormat.UPC_A,
+  BarcodeFormat.UPC_E,
+  BarcodeFormat.CODE_128,
+  BarcodeFormat.CODE_39,
+  BarcodeFormat.ITF,
+];
+
 export function ReceiveStockForm({
   currency,
   items,
@@ -41,6 +51,7 @@ export function ReceiveStockForm({
   const [isScanning, setIsScanning] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const lastScannedBarcodeRef = useRef("");
   const selectedItem = useMemo(() => items.find((item) => item.id === selectedItemId) ?? null, [items, selectedItemId]);
   const stockUnit = selectedItem?.default_package_unit ?? selectedItem?.unit ?? "";
   const hasSavedPackageSize = selectedItem?.default_package_size != null && selectedItem.default_package_size !== "";
@@ -57,7 +68,7 @@ export function ReceiveStockForm({
 
     const matchedItem = findItemByBarcode(normalized);
     if (!matchedItem) {
-      setScanStatus(`No inventory item found for barcode ${normalized}.`);
+      setScanStatus(`Scanned ${normalized}, but no inventory item uses this barcode.`);
       return false;
     }
 
@@ -77,13 +88,35 @@ export function ReceiveStockForm({
     if (!videoRef.current) return;
 
     setIsScanning(true);
-    setScanStatus("Starting camera...");
+    setScanStatus("Starting rear camera...");
+    lastScannedBarcodeRef.current = "";
 
     try {
-      const reader = new BrowserMultiFormatReader();
-      const controls = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, error) => {
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, retailBarcodeFormats);
+      hints.set(DecodeHintType.TRY_HARDER, true);
+
+      const reader = new BrowserMultiFormatReader(hints, {
+        delayBetweenScanAttempts: 80,
+        delayBetweenScanSuccess: 300,
+        tryPlayVideoTimeout: 5000,
+      });
+      const constraints: MediaStreamConstraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      };
+
+      const controls = await reader.decodeFromConstraints(constraints, videoRef.current, (result, error) => {
         if (result) {
-          selectBarcode(result.getText());
+          const text = result.getText().trim();
+          if (text && text !== lastScannedBarcodeRef.current) {
+            lastScannedBarcodeRef.current = text;
+            selectBarcode(text);
+          }
           return;
         }
 
@@ -93,7 +126,7 @@ export function ReceiveStockForm({
       });
 
       scannerControlsRef.current = controls;
-      setScanStatus("Point your camera at the item barcode.");
+      setScanStatus("Hold the barcode inside the frame, fill most of the box, and keep it steady.");
     } catch (error) {
       setIsScanning(false);
       setScanStatus(error instanceof Error ? error.message : "Camera scanning is not available in this browser.");
@@ -147,12 +180,15 @@ export function ReceiveStockForm({
             </Button>
           </div>
 
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            className={isScanning ? "aspect-video w-full rounded-[var(--radius-sm)] bg-black object-cover md:max-w-xl" : "hidden"}
-          />
+          <div className={isScanning ? "relative overflow-hidden rounded-[var(--radius-sm)] bg-black md:max-w-xl" : "hidden"}>
+            <video ref={videoRef} muted playsInline className="aspect-video w-full object-cover" />
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10">
+              <div className="h-24 w-[82%] rounded-[var(--radius-sm)] border-2 border-white shadow-[0_0_0_999px_rgba(0,0,0,0.35)] sm:h-28" />
+            </div>
+            <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
+              Keep the barcode horizontal and well lit
+            </div>
+          </div>
 
           <p className="text-xs text-[var(--muted)]">{scanStatus}</p>
         </div>
