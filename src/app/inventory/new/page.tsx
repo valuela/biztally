@@ -112,6 +112,16 @@ export default async function NewInventoryItemPage({
                   <Input id="name" name="name" placeholder="Revel Bars (24pc)" required />
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="brand_name">Brand name</Label>
+                  <Input id="brand_name" name="brand_name" placeholder="Magnolia" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="supplier_name">Bought from</Label>
+                  <Input id="supplier_name" name="supplier_name" placeholder="S&R, Puregold, local supplier" />
+                </div>
+
                 <div className="space-y-2 md:col-span-2">
                   <Label htmlFor="image_file">Item image</Label>
                   <Input
@@ -167,6 +177,11 @@ export default async function NewInventoryItemPage({
                 <div className="space-y-2">
                   <Label htmlFor="cost_per_unit">Cost per unit ({businessCurrency})</Label>
                   <Input id="cost_per_unit" name="cost_per_unit" type="number" step="0.01" min="0" defaultValue="0" required />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="purchase_price">Purchase price ({businessCurrency})</Label>
+                  <Input id="purchase_price" name="purchase_price" type="number" step="0.01" min="0" placeholder="Total paid for this purchase" />
                 </div>
 
                 <div className="space-y-2">

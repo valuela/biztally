@@ -34,6 +34,9 @@ type InventoryRow = {
   name: string;
   barcode: string | null;
   image_url: string | null;
+  brand_name: string | null;
+  supplier_name: string | null;
+  purchase_price: string | number | null;
   inventory_type: InventoryType;
   unit: string;
   quantity_on_hand: string | number;
@@ -169,7 +172,7 @@ export default async function InventoryPage() {
     const [{ data: inventoryRows }, { data: movementRows }] = await Promise.all([
       supabase
         .from("inventory_items")
-        .select("id, name, barcode, image_url, inventory_type, unit, quantity_on_hand, cost_per_unit, low_stock_threshold, expiration_date, notes, updated_at")
+        .select("id, name, barcode, image_url, brand_name, supplier_name, purchase_price, inventory_type, unit, quantity_on_hand, cost_per_unit, low_stock_threshold, expiration_date, notes, updated_at")
         .eq("business_id", businessId)
         .order("updated_at", { ascending: false }),
       supabase
@@ -264,7 +267,7 @@ export default async function InventoryPage() {
             <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
-                <Input className="pl-9" placeholder="Search item, barcode, notes" />
+                <Input className="pl-9" placeholder="Search item, brand, supplier, barcode" />
               </div>
 
             <div className="flex flex-wrap gap-2">
@@ -301,14 +304,14 @@ export default async function InventoryPage() {
             {items.length > 0 ? (
               <>
                 <div className="hidden overflow-x-auto rounded-[var(--radius-md)] border border-[var(--border)] md:block">
-                  <Table className="min-w-[980px]">
+                  <Table className="min-w-[1080px]">
                     <THead>
                       <TR>
                         <TH>Item</TH>
                         <TH>Type</TH>
                         <TH>Stock</TH>
-                        <TH>Cost/Unit</TH>
-                        <TH>Notes</TH>
+                        <TH>Cost</TH>
+                        <TH>Supplier</TH>
                         <TH>Status</TH>
                         <TH>Updated</TH>
                         <TH>Actions</TH>
@@ -339,6 +342,9 @@ export default async function InventoryPage() {
                                 </span>
                                 <div className="min-w-0">
                                   <p className="font-medium text-[var(--foreground)]">{item.name}</p>
+                                  <p className="mt-1 text-xs text-[var(--muted)]">
+                                    {item.brand_name ? `Brand ${item.brand_name}` : "No brand yet"}
+                                  </p>
                                   <p className="mt-1 text-xs text-[var(--muted)]">
                                     {item.barcode ? `Barcode ${item.barcode}` : "No barcode yet"}
                                   </p>
@@ -371,9 +377,16 @@ export default async function InventoryPage() {
                                 </p>
                               </div>
                             </TD>
-                            <TD className="font-medium">{formatMoney(item.cost_per_unit, businessCurrency)}</TD>
-                            <TD className="max-w-[220px] truncate text-sm text-[var(--muted)]">
-                              {item.notes ?? "No notes"}
+                            <TD>
+                              <div>
+                                <p className="font-medium">{formatMoney(item.cost_per_unit, businessCurrency)}</p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  Bought {item.purchase_price != null ? formatMoney(item.purchase_price, businessCurrency) : "not set"}
+                                </p>
+                              </div>
+                            </TD>
+                            <TD className="max-w-[180px] truncate text-sm text-[var(--muted)]">
+                              {item.supplier_name ?? "No supplier yet"}
                             </TD>
                             <TD>
                               <StatusBadge label={status} tone={toneForStock(status)} />
@@ -428,7 +441,10 @@ export default async function InventoryPage() {
                                 </span>
                               <div className="min-w-0">
                                 <p className="font-medium text-[var(--foreground)]">{item.name}</p>
-                                <p className="mt-1 text-xs text-[var(--muted)]">{meta.label} · {item.unit}</p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">{meta.label} - {item.unit}</p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {item.brand_name ? `Brand ${item.brand_name}` : "No brand yet"}
+                                </p>
                                 <p className="mt-1 text-xs text-[var(--muted)]">
                                   {item.barcode ? `Barcode ${item.barcode}` : "No barcode yet"}
                                 </p>
@@ -463,12 +479,14 @@ export default async function InventoryPage() {
                               <p className="font-medium">{formatMoney(item.cost_per_unit, businessCurrency)}</p>
                             </div>
                             <div>
-                              <p className="text-xs text-[var(--muted)]">Updated</p>
-                              <p className="font-medium">{item.updated_at}</p>
+                              <p className="text-xs text-[var(--muted)]">Bought from</p>
+                              <p className="truncate font-medium">{item.supplier_name ?? "Not set"}</p>
                             </div>
                             <div>
-                              <p className="text-xs text-[var(--muted)]">Notes</p>
-                              <p className="font-medium truncate">{item.notes ?? "No notes"}</p>
+                              <p className="text-xs text-[var(--muted)]">Purchase price</p>
+                              <p className="font-medium">
+                                {item.purchase_price != null ? formatMoney(item.purchase_price, businessCurrency) : "Not set"}
+                              </p>
                             </div>
                           </div>
 

@@ -40,9 +40,13 @@ export async function createInventoryItem(formData: FormData) {
   const barcode = String(formData.get("barcode") ?? "").trim();
   const inventoryType = String(formData.get("inventory_type") ?? "").trim();
   const unit = String(formData.get("unit") ?? "").trim();
+  const brandName = String(formData.get("brand_name") ?? "").trim();
+  const supplierName = String(formData.get("supplier_name") ?? "").trim();
   const imageFile = formData.get("image_file");
   const quantityOnHand = parseNumber(formData.get("quantity_on_hand"));
   const costPerUnit = parseNumber(formData.get("cost_per_unit"));
+  const purchasePriceRaw = String(formData.get("purchase_price") ?? "").trim();
+  const purchasePrice = purchasePriceRaw === "" ? null : parseNumber(purchasePriceRaw);
   const lowStockThresholdRaw = String(formData.get("low_stock_threshold") ?? "").trim();
   const lowStockThreshold = lowStockThresholdRaw === "" ? null : parseNumber(lowStockThresholdRaw);
   const expirationDateRaw = String(formData.get("expiration_date") ?? "").trim();
@@ -50,6 +54,10 @@ export async function createInventoryItem(formData: FormData) {
 
   if (!name || !inventoryType || !unit || Number.isNaN(quantityOnHand) || Number.isNaN(costPerUnit)) {
     fail("Fill in the required fields before saving.");
+  }
+
+  if (Number.isNaN(purchasePrice) || Number.isNaN(lowStockThreshold)) {
+    fail("Enter valid numbers for purchase price and low stock threshold.");
   }
 
   if (!["raw_material", "packaging", "finished_product", "supply"].includes(inventoryType)) {
@@ -80,6 +88,9 @@ export async function createInventoryItem(formData: FormData) {
       name,
       barcode: barcode || null,
       image_url: imageUrl,
+      brand_name: brandName || null,
+      supplier_name: supplierName || null,
+      purchase_price: purchasePrice,
       inventory_type: inventoryType,
       unit,
       quantity_on_hand: quantityOnHand,
