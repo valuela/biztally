@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Barcode, Sparkles } from "lucide-react";
 import { useState } from "react";
+import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,17 @@ type VendorOption = {
   id: string;
   name: string;
 };
+
+function SaveItemButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button type="submit" className="gap-2" disabled={pending}>
+      <Sparkles size={16} />
+      {pending ? "Saving item..." : "Save item"}
+    </Button>
+  );
+}
 
 export function InventoryItemForm({
   currency,
@@ -135,10 +147,7 @@ export function InventoryItemForm({
         >
           Cancel
         </Link>
-        <Button type="submit" className="gap-2">
-          <Sparkles size={16} />
-          Save item
-        </Button>
+        <SaveItemButton />
       </div>
     </form>
   );

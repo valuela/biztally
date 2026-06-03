@@ -11,6 +11,7 @@ type CostFieldsProps = {
   defaultPackageSize?: string | number | null;
   defaultPackageUnit?: string | null;
   lockPackageSize?: boolean;
+  mode?: "create" | "receive";
 };
 
 function computeUnitCost(purchasePrice: string, quantity: string) {
@@ -35,6 +36,7 @@ export function CostFields({
   defaultPackageSize,
   defaultPackageUnit,
   lockPackageSize = false,
+  mode = "create",
 }: CostFieldsProps) {
   const fieldId = (name: string) => `${idPrefix}${name}`;
   const [packagesReceived, setPackagesReceived] = useState("1");
@@ -47,6 +49,7 @@ export function CostFields({
   const quantityReceived = computeQuantityReceived(packagesReceived, packageSize);
   const computedCost = computeUnitCost(purchasePrice, quantityReceived);
   const costPerUnit = manualCost ? manualCostValue : computedCost || "0.00";
+  const isReceiveMode = mode === "receive";
 
   return (
     <>
@@ -101,10 +104,20 @@ export function CostFields({
         </div>
       )}
 
-      <div className="space-y-2">
-        <Label htmlFor={fieldId("quantity_on_hand")}>Quantity added to stock</Label>
+      <div className={isReceiveMode ? "rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-alt)] p-3" : "space-y-2"}>
+        <Label htmlFor={fieldId("quantity_on_hand")}>{isReceiveMode ? "Calculated stock added" : "Quantity added to stock"}</Label>
         <div className="relative">
-          <Input id={fieldId("quantity_on_hand")} name="quantity_on_hand" type="number" step="0.01" min="0" value={quantityReceived} readOnly required className="pr-16" />
+          <Input
+            id={fieldId("quantity_on_hand")}
+            name="quantity_on_hand"
+            type="number"
+            step="0.01"
+            min="0"
+            value={quantityReceived}
+            readOnly
+            required
+            className={isReceiveMode ? "mt-2 border-transparent bg-[var(--surface)] pr-16 text-lg font-semibold" : "pr-16"}
+          />
           <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-[var(--muted)]">
             {packageUnit || "unit"}
           </span>
@@ -147,7 +160,7 @@ export function CostFields({
           required
         />
         <p className="text-xs text-[var(--muted)]">
-          Auto-computed per {stockUnit || "stock unit"} from purchase price divided by stock quantity.
+          {isReceiveMode ? "Auto-computed. Change only if the receipt math needs correction." : `Auto-computed per ${stockUnit || "stock unit"} from purchase price divided by stock quantity.`}
         </p>
       </div>
     </>
