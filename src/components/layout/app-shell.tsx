@@ -7,9 +7,13 @@ import {
   BellRing,
   Boxes,
   ChartColumnIncreasing,
+  ChefHat,
+  Factory,
   Menu,
   Search,
   Settings,
+  ShoppingCart,
+  Store,
   User,
   X,
 } from "lucide-react";
@@ -27,8 +31,12 @@ import {
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: ChartColumnIncreasing },
   { href: "/inventory", label: "Inventory", icon: Boxes },
-  { href: "#", label: "Products", icon: Boxes },
-  { href: "#", label: "Sales", icon: ChartColumnIncreasing },
+  { href: "/recipes", label: "Recipes", icon: ChefHat },
+  { href: "/production", label: "Production", icon: Factory },
+  { href: "/reorder", label: "Reorder", icon: ShoppingCart },
+  { href: "/vendors", label: "Vendors", icon: Store },
+  { href: "/products", label: "Products", icon: Boxes },
+  { href: "/sales", label: "Sales", icon: ChartColumnIncreasing },
   { href: "#", label: "Expenses", icon: ChartColumnIncreasing },
 ];
 

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { inventoryUnitValues } from "@/lib/inventory/units";
 import { createClient } from "@/lib/supabase/server";
 
 function parseNumber(value: FormDataEntryValue | null) {
@@ -67,6 +68,23 @@ export async function createInventoryItem(formData: FormData) {
 
   if (!["raw_material", "packaging", "finished_product", "supply"].includes(inventoryType)) {
     fail("Choose a valid inventory type.");
+  }
+
+  if (!inventoryUnitValues.includes(unit as (typeof inventoryUnitValues)[number])) {
+    fail("Choose a valid stock unit.");
+  }
+
+  if (barcode) {
+    const { data: existingBarcodeItem } = await supabase
+      .from("inventory_items")
+      .select("id, name")
+      .eq("business_id", businessId)
+      .eq("barcode", barcode)
+      .maybeSingle();
+
+    if (existingBarcodeItem) {
+      fail(`Barcode already belongs to ${existingBarcodeItem.name}. Receive stock for that item instead.`);
+    }
   }
 
   let vendorName: string | null = null;
@@ -148,6 +166,9 @@ export async function createInventoryItem(formData: FormData) {
         purchase_price: purchasePrice,
         cost_per_unit: costPerUnit,
         packages_received: packagesReceived,
+        sealed_packs_remaining: packagesReceived,
+        open_packs: 0,
+        emptied_packs: 0,
         package_size: packageSize,
         package_unit: unit,
         quantity_received: quantityOnHand,

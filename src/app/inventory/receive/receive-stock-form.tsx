@@ -60,6 +60,7 @@ export function ReceiveStockForm({
   const [selectedItemId, setSelectedItemId] = useState("");
   const [barcodeValue, setBarcodeValue] = useState("");
   const [scanStatus, setScanStatus] = useState("Scan a barcode or enter it manually.");
+  const [unmatchedBarcode, setUnmatchedBarcode] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
@@ -80,10 +81,12 @@ export function ReceiveStockForm({
 
     const matchedItem = findItemByBarcode(normalized);
     if (!matchedItem) {
+      setUnmatchedBarcode(normalized);
       setScanStatus(`Scanned ${normalized}, but no inventory item uses this barcode.`);
       return false;
     }
 
+    setUnmatchedBarcode("");
     setSelectedItemId(matchedItem.id);
     setScanStatus(`Matched ${matchedItem.name}${matchedItem.brand_name ? ` - ${matchedItem.brand_name}` : ""}.`);
     stopScanner();
@@ -199,6 +202,14 @@ export function ReceiveStockForm({
         </div>
 
         <p className="text-xs text-[var(--muted)]">{scanStatus}</p>
+        {unmatchedBarcode ? (
+          <Link
+            href={`/inventory/new?barcode=${encodeURIComponent(unmatchedBarcode)}`}
+            className="inline-flex h-10 items-center justify-center rounded-full border border-[var(--border)] !bg-[var(--primary)] px-4 text-sm font-medium !text-white hover:!bg-[var(--primary-hover)]"
+          >
+            Create item with this barcode
+          </Link>
+        ) : null}
       </section>
 
       <section className="space-y-3 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-4">

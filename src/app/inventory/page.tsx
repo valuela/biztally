@@ -43,6 +43,7 @@ type InventoryRow = {
   quantity_on_hand: string | number;
   cost_per_unit: string | number;
   low_stock_threshold: string | number | null;
+  low_stock_pack_threshold: string | number | null;
   expiration_date: string | null;
   notes: string | null;
   updated_at: string;
@@ -57,6 +58,9 @@ type InventoryBatchRow = {
   cost_per_unit: string | number;
   quantity_received: string | number;
   quantity_remaining: string | number;
+  sealed_packs_remaining: string | number | null;
+  open_packs: string | number;
+  emptied_packs: string | number;
   expiration_date: string | null;
   received_at: string;
 };
@@ -135,8 +139,20 @@ function formatPhilippineDateTime(value: string | null | undefined) {
   }).format(date);
 }
 
-function getStatus(item: InventoryRow, stock = toNumber(item.quantity_on_hand)): InventoryStatus {
+function daysUntil(value: string | null | undefined) {
+  if (!value) return null;
+  const today = new Date();
+  const target = new Date(`${value}T00:00:00+08:00`);
+  if (Number.isNaN(target.getTime())) return null;
+  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.ceil((target.getTime() - todayMidnight.getTime()) / 86_400_000);
+}
+
+function getStatus(item: InventoryRow, stock = toNumber(item.quantity_on_hand), packs?: { sealed: number; open: number }): InventoryStatus {
   const onHand = stock;
+  const packThreshold = toNumber(item.low_stock_pack_threshold);
+  if (packThreshold > 0 && packs && packs.sealed + packs.open <= packThreshold) return "Low stock";
+
   const threshold = toNumber(item.low_stock_threshold);
 
   if (onHand <= 0) return "Out of stock";
@@ -206,12 +222,12 @@ export default async function InventoryPage() {
     const [{ data: inventoryRows }, { data: batchRows }, { data: movementRows }] = await Promise.all([
       supabase
         .from("inventory_items")
-        .select("id, name, barcode, image_url, brand_name, inventory_type, unit, default_package_size, default_package_unit, quantity_on_hand, cost_per_unit, low_stock_threshold, expiration_date, notes, updated_at")
+        .select("id, name, barcode, image_url, brand_name, inventory_type, unit, default_package_size, default_package_unit, quantity_on_hand, cost_per_unit, low_stock_threshold, low_stock_pack_threshold, expiration_date, notes, updated_at")
         .eq("business_id", businessId)
         .order("updated_at", { ascending: false }),
       supabase
         .from("inventory_batches")
-        .select("id, inventory_item_id, batch_code, supplier_name, purchase_price, cost_per_unit, quantity_received, quantity_remaining, expiration_date, received_at")
+        .select("id, inventory_item_id, batch_code, supplier_name, purchase_price, cost_per_unit, quantity_received, quantity_remaining, sealed_packs_remaining, open_packs, emptied_packs, expiration_date, received_at")
         .eq("business_id", businessId)
         .order("expiration_date", { ascending: true, nullsFirst: false }),
       supabase
@@ -250,18 +266,31 @@ export default async function InventoryPage() {
     return itemBatches(item.id).find((batch) => toNumber(batch.quantity_remaining) > 0 && batch.expiration_date) ?? null;
   }
 
+  function packState(item: InventoryRow) {
+    const itemBatchRows = itemBatches(item.id);
+    return {
+      sealed: itemBatchRows.reduce((total, batch) => total + toNumber(batch.sealed_packs_remaining), 0),
+      open: itemBatchRows.reduce((total, batch) => total + toNumber(batch.open_packs), 0),
+    };
+  }
+
   const totalItems = items.length;
-  const lowStockItems = items.filter((item) => getStatus(item, stockOnHand(item)) !== "In stock").length;
+  const lowStockItems = items.filter((item) => getStatus(item, stockOnHand(item), packState(item)) !== "In stock").length;
   const barcodeReady = items.filter((item) => Boolean(item.barcode)).length;
   const ingredients = items.filter((item) => item.inventory_type === "raw_material").length;
+  const inventoryValue = batches.reduce((total, batch) => total + toNumber(batch.quantity_remaining) * toNumber(batch.cost_per_unit), 0);
+  const expiringSoon = batches.filter((batch) => {
+    const days = daysUntil(batch.expiration_date);
+    return toNumber(batch.quantity_remaining) > 0 && days != null && days >= 0 && days <= 30;
+  }).length;
 
   const lowStockQueue = items
-    .filter((item) => getStatus(item, stockOnHand(item)) !== "In stock")
+    .filter((item) => getStatus(item, stockOnHand(item), packState(item)) !== "In stock")
     .slice(0, 3)
     .map((item) => ({
       name: item.name,
       qty: `${formatStock(stockOnHand(item))} ${item.unit}`,
-      urgency: getStatus(item, stockOnHand(item)) === "Out of stock" ? "Critical" : "High",
+      urgency: getStatus(item, stockOnHand(item), packState(item)) === "Out of stock" ? "Critical" : "High",
     }));
 
   return (
@@ -313,14 +342,53 @@ export default async function InventoryPage() {
         </Card>
       ) : null}
 
-      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="mt-4 md:hidden">
+        <Card>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="text-base">Inventory snapshot</CardTitle>
+            <p className="text-xs text-[var(--muted)]">Tap into items below for batch-level details.</p>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            <div className="grid grid-cols-3 gap-x-3 gap-y-4">
+              <div>
+                <p className="text-xs text-[var(--muted)]">Items</p>
+                <p className="mt-1 text-lg font-bold">{totalItems}</p>
+              </div>
+              <div>
+                <p className="text-xs text-[var(--muted)]">Low</p>
+                <p className="mt-1 text-lg font-bold">{lowStockItems}</p>
+              </div>
+              <div>
+                <p className="text-xs text-[var(--muted)]">Expiry</p>
+                <p className="mt-1 text-lg font-bold">{expiringSoon}</p>
+              </div>
+              <div>
+                <p className="text-xs text-[var(--muted)]">Barcodes</p>
+                <p className="mt-1 text-sm font-semibold">{totalItems > 0 ? Math.round((barcodeReady / totalItems) * 100) : 0}%</p>
+              </div>
+              <div>
+                <p className="text-xs text-[var(--muted)]">Ingredients</p>
+                <p className="mt-1 text-sm font-semibold">{ingredients}</p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-[var(--muted)]">Value</p>
+                <p className="mt-1 truncate text-sm font-semibold">{formatMoney(inventoryValue, businessCurrency)}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="mt-6 hidden gap-4 md:grid md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Total items" value={totalItems.toString()} meta="Products, ingredients, and packaging" />
         <StatCard label="Low stock" value={lowStockItems.toString()} meta="Needs reorder attention" />
         <StatCard label="Barcode ready" value={barcodeReady.toString()} meta="Items with a barcode value" />
         <StatCard label="Ingredients" value={ingredients.toString()} meta="Raw materials used in production" />
+        <StatCard label="Inventory value" value={formatMoney(inventoryValue, businessCurrency)} meta="Remaining batch value" />
+        <StatCard label="Expiring soon" value={expiringSoon.toString()} meta="Batches within 30 days" />
       </section>
 
-      <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.4fr)_360px]">
+      <section className="mt-4 grid grid-cols-1 gap-4">
         <Card>
           <CardHeader className="space-y-4">
             <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
@@ -390,7 +458,8 @@ export default async function InventoryPage() {
                     <TBody>
                       {items.map((item) => {
                         const stock = stockOnHand(item);
-                        const status = getStatus(item, stock);
+                        const packs = packState(item);
+                        const status = getStatus(item, stock, packs);
                         const meta = typeMeta[item.inventory_type];
                         const Icon = meta.icon;
                         const progress = progressForItem(item, stock);
@@ -426,6 +495,10 @@ export default async function InventoryPage() {
                                       ? `${formatStock(toNumber(item.default_package_size))} ${item.default_package_unit ?? item.unit} per pack`
                                       : "Package size not set"}
                                   </p>
+                                  <p className="mt-1 text-xs text-[var(--muted)]">
+                                    {formatStock(packs.sealed)} sealed / {formatStock(packs.open)} open
+                                  </p>
+                                  {packs.open > 1 ? <p className="mt-1 text-xs text-amber-600">Finish open packs first</p> : null}
                                   <div className="mt-2 h-1.5 w-40 rounded-full bg-[var(--surface-alt)]">
                                     <div
                                       className={cn(
@@ -479,16 +552,24 @@ export default async function InventoryPage() {
                             </TD>
                             <TD>
                               <div className="flex flex-wrap gap-2">
-                                <Button className="h-8 px-3 text-xs">
+                                <Link
+                                  href={`/inventory/${item.id}`}
+                                  className="inline-flex h-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-alt)]"
+                                >
+                                  View
+                                </Link>
+                                <Link
+                                  href={`/inventory/${item.id}/edit`}
+                                  className="inline-flex h-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-alt)]"
+                                >
                                   Edit
-                                </Button>
-                                {status !== "In stock" ? (
-                                  <Button className="h-8 px-3 text-xs">Reorder</Button>
-                                ) : (
-                                  <Button className="h-8 px-3 text-xs">
-                                    View
-                                  </Button>
-                                )}
+                                </Link>
+                                <Link
+                                  href={`/inventory/${item.id}/use`}
+                                  className="inline-flex h-8 items-center justify-center rounded-full border border-[var(--border)] !bg-[var(--primary)] px-3 text-xs font-medium !text-white hover:!bg-[var(--primary-hover)]"
+                                >
+                                  Use
+                                </Link>
                               </div>
                             </TD>
                           </TR>
@@ -501,7 +582,8 @@ export default async function InventoryPage() {
                 <div className="space-y-3 md:hidden">
                   {items.map((item) => {
                     const stock = stockOnHand(item);
-                    const status = getStatus(item, stock);
+                    const packs = packState(item);
+                    const status = getStatus(item, stock, packs);
                     const meta = typeMeta[item.inventory_type];
                     const Icon = meta.icon;
                     const progress = progressForItem(item, stock);
@@ -539,6 +621,10 @@ export default async function InventoryPage() {
                                     ? `${formatStock(toNumber(item.default_package_size))} ${item.default_package_unit ?? item.unit} per pack`
                                     : "Package size not set"}
                                 </p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {formatStock(packs.sealed)} sealed / {formatStock(packs.open)} open
+                                </p>
+                                {packs.open > 1 ? <p className="mt-1 text-xs text-amber-600">Finish open packs first</p> : null}
                               </div>
                             </div>
                             <StatusBadge label={status} tone={toneForStock(status)} />
@@ -586,16 +672,24 @@ export default async function InventoryPage() {
                           </div>
 
                           <div className="mt-4 flex gap-2">
-                            <Button className="h-9 flex-1">
+                            <Link
+                              href={`/inventory/${item.id}`}
+                              className="inline-flex h-9 flex-1 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-alt)]"
+                            >
+                              View
+                            </Link>
+                            <Link
+                              href={`/inventory/${item.id}/edit`}
+                              className="inline-flex h-9 flex-1 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-alt)]"
+                            >
                               Edit
-                            </Button>
-                            {status !== "In stock" ? (
-                              <Button className="h-9 flex-1">Reorder</Button>
-                            ) : (
-                              <Button className="h-9 flex-1">
-                                View
-                              </Button>
-                            )}
+                            </Link>
+                            <Link
+                              href={`/inventory/${item.id}/use`}
+                              className="inline-flex h-9 flex-1 items-center justify-center rounded-full border border-[var(--border)] !bg-[var(--primary)] px-3 text-sm font-medium !text-white hover:!bg-[var(--primary-hover)]"
+                            >
+                              Use
+                            </Link>
                           </div>
                         </CardContent>
                       </Card>
@@ -625,7 +719,7 @@ export default async function InventoryPage() {
           </CardContent>
         </Card>
 
-        <div className="space-y-4">
+        <div className="grid gap-4 xl:grid-cols-3">
           <Card>
             <CardHeader>
               <CardTitle className="text-lg">Barcode flow</CardTitle>
@@ -733,7 +827,7 @@ export default async function InventoryPage() {
                   <div>
                     <p className="text-sm font-medium">What to build next</p>
                     <p className="text-sm text-[var(--muted)]">
-                      Connect item creation and barcode scanning to Supabase mutations after the table view is stable.
+                      Review expiring batches, deduct used stock with FIFO, or add missing barcodes from item detail pages.
                     </p>
                   </div>
                 </div>

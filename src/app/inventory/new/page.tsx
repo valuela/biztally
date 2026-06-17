@@ -17,7 +17,7 @@ type VendorOption = {
 export default async function NewInventoryItemPage({
   searchParams,
 }: {
-  searchParams?: { error?: string | string[] };
+  searchParams?: { error?: string | string[]; barcode?: string | string[] };
 }) {
   const supabase = await createClient();
   const {
@@ -52,6 +52,9 @@ export default async function NewInventoryItemPage({
   const error = Array.isArray(searchParams?.error)
     ? searchParams?.error[0]
     : searchParams?.error;
+  const initialBarcode = Array.isArray(searchParams?.barcode)
+    ? searchParams?.barcode[0]
+    : searchParams?.barcode;
 
   return (
     <AppShell userEmail={user.email}>
@@ -87,7 +90,7 @@ export default async function NewInventoryItemPage({
               </FormAlert>
             ) : null}
 
-            <InventoryItemForm currency={businessCurrency} vendors={vendors} />
+            <InventoryItemForm currency={businessCurrency} vendors={vendors} initialBarcode={initialBarcode ?? ""} />
           </CardContent>
         </Card>
 

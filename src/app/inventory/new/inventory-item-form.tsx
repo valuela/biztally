@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { CostFields } from "./cost-fields";
 import { createInventoryItem } from "./actions";
 import { inventoryTypeOptions } from "./inventory-options";
+import { inventoryUnitOptions } from "@/lib/inventory/units";
 
 type VendorOption = {
   id: string;
@@ -30,11 +31,13 @@ function SaveItemButton() {
 export function InventoryItemForm({
   currency,
   vendors,
+  initialBarcode = "",
 }: {
   currency: string;
   vendors: VendorOption[];
+  initialBarcode?: string;
 }) {
-  const [stockUnit, setStockUnit] = useState("");
+  const [stockUnit, setStockUnit] = useState("kg");
 
   return (
     <form action={createInventoryItem} className="space-y-6">
@@ -87,7 +90,7 @@ export function InventoryItemForm({
           <Label htmlFor="barcode">Barcode</Label>
           <div className="relative">
             <Barcode className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
-            <Input id="barcode" name="barcode" className="pl-9" placeholder="1234567890123" />
+            <Input id="barcode" name="barcode" className="pl-9" placeholder="1234567890123" defaultValue={initialBarcode} />
           </div>
         </div>
 
@@ -113,7 +116,20 @@ export function InventoryItemForm({
 
         <div className="space-y-2">
           <Label htmlFor="unit">Stock unit</Label>
-          <Input id="unit" name="unit" placeholder="kg, g, ml, pcs" value={stockUnit} onChange={(event) => setStockUnit(event.target.value)} required />
+          <select
+            id="unit"
+            name="unit"
+            required
+            className="h-10 w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
+            value={stockUnit}
+            onChange={(event) => setStockUnit(event.target.value)}
+          >
+            {inventoryUnitOptions.map((unit) => (
+              <option key={unit.value} value={unit.value}>
+                {unit.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <CostFields currency={currency} stockUnit={stockUnit} />
