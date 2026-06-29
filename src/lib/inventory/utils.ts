@@ -31,6 +31,22 @@ export function formatMoney(value: string | number | null | undefined, currency 
   }
 }
 
+export function formatCompactMoney(value: string | number | null | undefined, currency = "PHP") {
+  const amount = toNumber(value);
+  try {
+    return new Intl.NumberFormat("en-PH", {
+      style: "currency",
+      currency,
+      notation: "compact",
+      maximumFractionDigits: amount >= 1000 ? 2 : 2,
+    }).format(amount);
+  } catch {
+    if (Math.abs(amount) >= 1_000_000) return `P${(amount / 1_000_000).toFixed(2)}M`;
+    if (Math.abs(amount) >= 1_000) return `P${(amount / 1_000).toFixed(2)}K`;
+    return `P${amount.toFixed(2)}`;
+  }
+}
+
 export function formatPhilippineDateTime(value: string | null | undefined) {
   if (!value) return "Not set";
   const date = new Date(value);

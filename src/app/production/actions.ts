@@ -86,6 +86,7 @@ async function buildProductionSnapshot(
           .eq("business_id", businessId)
           .eq("recipe_id", recipeId)
           .eq("id", variantId)
+          .eq("is_active", true)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     variantId

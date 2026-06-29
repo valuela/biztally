@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { CalendarDays, ChevronDown, Plus, ReceiptText, TrendingUp } from "lucide-react";
+import { CalendarDays, ChevronDown, Pencil, Plus, ReceiptText, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatMoney, formatPhilippineDate, formatStock, getCurrentBusiness, toNumber } from "@/lib/inventory/utils";
+import { DeleteSaleButton } from "./delete-sale-button";
 
 type SaleRow = {
   id: string;
@@ -191,28 +192,35 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
                       </summary>
 
                       <div className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
-                        <div className="hidden grid-cols-[minmax(0,1.3fr)_110px_110px_100px_120px_auto] items-center gap-3 bg-[var(--surface-alt)] px-3 py-2 text-xs font-medium text-[var(--muted)] md:grid">
+                        <div className="hidden grid-cols-[minmax(0,1fr)_100px_100px_80px_110px_70px_180px] items-center gap-3 bg-[var(--surface-alt)] px-3 py-2 text-xs font-medium text-[var(--muted)] lg:grid">
                           <span>Product</span>
                           <span>Revenue</span>
                           <span>Profit</span>
                           <span>Margin</span>
                           <span>Price</span>
-                          <span className="text-right">Status</span>
+                          <span>Status</span>
+                          <span className="text-right">Actions</span>
                         </div>
                         {daySales.map((sale) => {
                           const item = sale.sale_items[0];
+                          const itemSummary = sale.sale_items
+                            .map((saleItem) => `${formatStock(toNumber(saleItem.quantity_sold))} ${saleItem.package_label} ${saleItem.product_name}`)
+                            .join(" + ");
+                          const totalUnits = sale.sale_items.reduce((total, saleItem) => total + toNumber(saleItem.units_sold), 0);
                           const margin = toNumber(sale.total_revenue) > 0 ? (toNumber(sale.total_profit) / toNumber(sale.total_revenue)) * 100 : 0;
 
                           return (
-                            <div key={sale.id} className="grid gap-3 p-3 md:grid-cols-[minmax(0,1.3fr)_110px_110px_100px_120px_auto] md:items-center">
+                            <div key={sale.id} className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_100px_100px_80px_110px_70px_180px] lg:items-center">
                               <div className="flex min-w-0 gap-3">
                                 <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--surface-alt)]">
                                   <ReceiptText size={16} />
                                 </span>
                                 <div className="min-w-0">
-                                  <p className="truncate font-medium text-[var(--foreground)]">{item?.product_name ?? "Sale"}</p>
+                                  <p className="truncate font-medium text-[var(--foreground)]">
+                                    {sale.sale_items.length > 1 ? `${sale.sale_items.length} products` : item?.product_name ?? "Sale"}
+                                  </p>
                                   <p className="mt-1 text-xs text-[var(--muted)]">
-                                    {item ? `${formatStock(toNumber(item.quantity_sold))} ${item.package_label} - ${formatStock(toNumber(item.units_sold))} pcs` : "No item"} -{" "}
+                                    {itemSummary || "No item"} - {formatStock(totalUnits)} pcs -{" "}
                                     {sale.customer_name ?? "Walk-in"} - {paymentLabel(sale.payment_method)}
                                   </p>
                                   {sale.notes ? <p className="mt-1 truncate text-xs text-[var(--muted)]">{sale.notes}</p> : null}
@@ -220,25 +228,37 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
                               </div>
 
                               <div>
-                                <p className="text-xs text-[var(--muted)] md:hidden">Revenue</p>
+                                <p className="text-xs text-[var(--muted)] lg:hidden">Revenue</p>
                                 <p className="font-semibold">{formatMoney(sale.total_revenue, currency)}</p>
                               </div>
                               <div>
-                                <p className="text-xs text-[var(--muted)] md:hidden">Profit</p>
+                                <p className="text-xs text-[var(--muted)] lg:hidden">Profit</p>
                                 <p className={`font-semibold ${toNumber(sale.total_profit) < 0 ? "text-red-600" : ""}`}>{formatMoney(sale.total_profit, currency)}</p>
                               </div>
                               <div>
-                                <p className="text-xs text-[var(--muted)] md:hidden">Margin</p>
+                                <p className="text-xs text-[var(--muted)] lg:hidden">Margin</p>
                                 <p className="font-semibold">{margin.toFixed(1)}%</p>
                               </div>
                               <div>
-                                <p className="text-xs text-[var(--muted)] md:hidden">Price</p>
-                                <p className="text-sm text-[var(--muted)]">{item ? formatMoney(item.selling_price_per_package, currency) : formatMoney(0, currency)} / pkg</p>
+                                <p className="text-xs text-[var(--muted)] lg:hidden">Price</p>
+                                <p className="text-sm text-[var(--muted)]">
+                                  {sale.sale_items.length > 1 ? `${sale.sale_items.length} lines` : `${item ? formatMoney(item.selling_price_per_package, currency) : formatMoney(0, currency)} / pkg`}
+                                </p>
                               </div>
-                              <div className="flex justify-start md:justify-end">
+                              <div className="flex justify-start">
                                 <Badge className={sale.status === "paid" ? "bg-emerald-50 text-emerald-700" : "bg-[var(--surface-alt)] text-[var(--muted)]"}>
                                   {sale.status}
                                 </Badge>
+                              </div>
+                              <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+                                <Link
+                                  href={`/sales/${sale.id}/edit`}
+                                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-alt)]"
+                                >
+                                  <Pencil size={15} />
+                                  Edit
+                                </Link>
+                                <DeleteSaleButton saleId={sale.id} />
                               </div>
                             </div>
                           );

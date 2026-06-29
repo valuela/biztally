@@ -6,11 +6,13 @@ export function StatCard({
   value,
   meta,
   compact = false,
+  fitValue = false,
 }: {
   label: string;
   value: string;
   meta?: string;
   compact?: boolean;
+  fitValue?: boolean;
 }) {
   return (
     <Card>
@@ -20,8 +22,10 @@ export function StatCard({
       <CardContent className={cn(compact && "px-3 pb-3 sm:px-6 sm:pb-6")}>
         <p
           className={cn(
-            "break-words text-2xl leading-8 font-bold tracking-tight sm:text-[32px] sm:leading-[36px]",
-            compact && "text-xl leading-6 sm:text-[32px] sm:leading-[36px]"
+            "truncate text-2xl leading-8 font-bold tracking-tight sm:text-[32px] sm:leading-[36px]",
+            compact && "text-xl leading-6 sm:text-[32px] sm:leading-[36px]",
+            fitValue &&
+              "truncate whitespace-nowrap text-xl leading-7 sm:text-2xl sm:leading-8 xl:text-[26px] xl:leading-8"
           )}
         >
           {value}

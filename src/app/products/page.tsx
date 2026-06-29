@@ -33,6 +33,28 @@ type ProductRow = {
     name: string;
     selling_price: string | number;
   } | null;
+  product_type: "single" | "assorted";
+  sellable_product_components?: ProductComponentRow[];
+};
+
+type ProductComponentRow = {
+  sellable_product_id: string;
+  recipe_id: string;
+  recipe_variant_id: string | null;
+  units_per_package: string | number;
+  recipes?: {
+    name: string;
+    batch_yield: string | number;
+    selling_price: string | number;
+    packaging_cost: string | number;
+    labor_cost: string | number;
+    overhead_cost: string | number;
+    target_margin_percent: string | number | null;
+  } | null;
+  recipe_variants?: {
+    name: string;
+    selling_price: string | number;
+  } | null;
 };
 
 type RecipeIngredientRow = {
@@ -56,7 +78,7 @@ export default async function ProductsPage() {
         supabase
           .from("sellable_products")
           .select(
-            "id, name, sku, recipe_id, recipe_variant_id, units_per_package, package_label, selling_price, packaging_cost, is_active, recipes(name, batch_yield, selling_price, packaging_cost, labor_cost, overhead_cost, target_margin_percent), recipe_variants(name, selling_price)"
+            "id, name, sku, product_type, recipe_id, recipe_variant_id, units_per_package, package_label, selling_price, packaging_cost, is_active, recipes(name, batch_yield, selling_price, packaging_cost, labor_cost, overhead_cost, target_margin_percent), recipe_variants(name, selling_price), sellable_product_components(sellable_product_id, recipe_id, recipe_variant_id, units_per_package, recipes(name, batch_yield, selling_price, packaging_cost, labor_cost, overhead_cost, target_margin_percent), recipe_variants(name, selling_price))"
           )
           .eq("business_id", businessId)
           .order("updated_at", { ascending: false }),
@@ -80,31 +102,47 @@ export default async function ProductsPage() {
   }, {});
 
   const costedProducts = products.map((product) => {
-    const recipe = product.recipes;
-    const baseIngredientCost = (ingredientsByRecipeId[product.recipe_id] ?? []).reduce(
-      (total, ingredient) => total + toNumber(ingredient.quantity) * (costByInventoryId.get(ingredient.inventory_item_id) ?? 0),
-      0
-    );
-    const extraIngredientCost = product.recipe_variant_id
-      ? (extrasByVariantId[product.recipe_variant_id] ?? []).reduce((total, ingredient) => {
-          const multiplier = ingredient.usage_basis === "per_piece" ? toNumber(recipe?.batch_yield) : 1;
-          return total + toNumber(ingredient.quantity) * multiplier * (costByInventoryId.get(ingredient.inventory_item_id) ?? 0);
-        }, 0)
-      : 0;
-    const recipeCost = calculateRecipeCost({
-      batchYield: toNumber(recipe?.batch_yield),
-      sellingPrice: toNumber(product.recipe_variants?.selling_price) || toNumber(recipe?.selling_price),
-      packagingCost: toNumber(recipe?.packaging_cost),
-      laborCost: toNumber(recipe?.labor_cost),
-      overheadCost: toNumber(recipe?.overhead_cost),
-      ingredientCost: baseIngredientCost + extraIngredientCost,
-      targetMarginPercent: toNumber(recipe?.target_margin_percent) || 40,
+    const components =
+      product.sellable_product_components && product.sellable_product_components.length > 0
+        ? product.sellable_product_components
+        : [
+            {
+              sellable_product_id: product.id,
+              recipe_id: product.recipe_id,
+              recipe_variant_id: product.recipe_variant_id,
+              units_per_package: product.units_per_package,
+              recipes: product.recipes,
+              recipe_variants: product.recipe_variants,
+            },
+          ];
+    const componentCosts = components.map((component) => {
+      const recipe = component.recipes ?? product.recipes;
+      const baseIngredientCost = (ingredientsByRecipeId[component.recipe_id] ?? []).reduce(
+        (total, ingredient) => total + toNumber(ingredient.quantity) * (costByInventoryId.get(ingredient.inventory_item_id) ?? 0),
+        0
+      );
+      const extraIngredientCost = component.recipe_variant_id
+        ? (extrasByVariantId[component.recipe_variant_id] ?? []).reduce((total, ingredient) => {
+            const multiplier = ingredient.usage_basis === "per_piece" ? toNumber(recipe?.batch_yield) : 1;
+            return total + toNumber(ingredient.quantity) * multiplier * (costByInventoryId.get(ingredient.inventory_item_id) ?? 0);
+          }, 0)
+        : 0;
+      const recipeCost = calculateRecipeCost({
+        batchYield: toNumber(recipe?.batch_yield),
+        sellingPrice: toNumber(component.recipe_variants?.selling_price) || toNumber(recipe?.selling_price),
+        packagingCost: toNumber(recipe?.packaging_cost),
+        laborCost: toNumber(recipe?.labor_cost),
+        overheadCost: toNumber(recipe?.overhead_cost),
+        ingredientCost: baseIngredientCost + extraIngredientCost,
+        targetMarginPercent: toNumber(recipe?.target_margin_percent) || 40,
+      });
+      return recipeCost.costPerUnit * toNumber(component.units_per_package);
     });
-    const packageCost = recipeCost.costPerUnit * toNumber(product.units_per_package) + toNumber(product.packaging_cost);
+    const packageCost = componentCosts.reduce((total, componentCost) => total + componentCost, 0) + toNumber(product.packaging_cost);
     const packageProfit = toNumber(product.selling_price) - packageCost;
     const packageMargin = toNumber(product.selling_price) > 0 ? (packageProfit / toNumber(product.selling_price)) * 100 : 0;
 
-    return { product, recipeCost, packageCost, packageProfit, packageMargin };
+    return { product, components, packageCost, packageProfit, packageMargin };
   });
 
   const totalProducts = products.length;
@@ -147,7 +185,7 @@ export default async function ProductsPage() {
               </div>
             ) : costedProducts.length > 0 ? (
               <div className="grid gap-3">
-                {costedProducts.map(({ product, packageCost, packageProfit, packageMargin }) => (
+                {costedProducts.map(({ product, components, packageCost, packageProfit, packageMargin }) => (
                   <div key={product.id} className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div className="flex min-w-0 gap-3">
@@ -158,8 +196,15 @@ export default async function ProductsPage() {
                           <p className="font-semibold text-[var(--foreground)]">{product.name}</p>
                           <p className="mt-1 text-sm text-[var(--muted)]">
                             {formatStock(toNumber(product.units_per_package))} pcs / {product.package_label}
-                            {product.recipe_variants?.name ? ` - ${product.recipe_variants.name}` : ""}
+                            {product.product_type === "assorted" ? " - assorted" : product.recipe_variants?.name ? ` - ${product.recipe_variants.name}` : ""}
                           </p>
+                          {product.product_type === "assorted" ? (
+                            <p className="mt-1 text-xs text-[var(--muted)]">
+                              {components
+                                .map((component) => `${formatStock(toNumber(component.units_per_package))} pcs ${component.recipe_variants?.name ?? component.recipes?.name ?? "Base recipe"}`)
+                                .join(" + ")}
+                            </p>
+                          ) : null}
                           <p className="mt-1 text-xs text-[var(--muted)]">{product.recipes?.name ?? "Recipe missing"}</p>
                         </div>
                       </div>

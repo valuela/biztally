@@ -26,9 +26,11 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
+import { formatCompactMoney } from "@/lib/inventory/utils";
 
 type InventoryType = "raw_material" | "packaging" | "finished_product" | "supply";
 type InventoryStatus = "In stock" | "Low stock" | "Out of stock";
+type InventoryFilter = "all" | "products" | "ingredients" | "low-stock";
 
 type InventoryRow = {
   id: string;
@@ -191,7 +193,53 @@ function movementLabel(movementType: string) {
   }
 }
 
-export default async function InventoryPage() {
+function normalizeInventoryFilter(value: string | string[] | undefined): InventoryFilter {
+  const filter = Array.isArray(value) ? value[0] : value;
+
+  if (filter === "products" || filter === "ingredients" || filter === "low-stock") {
+    return filter;
+  }
+
+  return "all";
+}
+
+function matchesInventorySearch(item: InventoryRow, batches: InventoryBatchRow[], query: string) {
+  if (!query) return true;
+
+  const searchText = [
+    item.name,
+    item.brand_name,
+    item.barcode,
+    item.notes,
+    item.unit,
+    item.default_package_unit,
+    typeMeta[item.inventory_type].label,
+    ...batches.map((batch) => batch.supplier_name),
+    ...batches.map((batch) => batch.batch_code),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return searchText.includes(query.toLowerCase());
+}
+
+function filterButtonHref(filter: InventoryFilter, query: string) {
+  const params = new URLSearchParams();
+  if (filter !== "all") params.set("filter", filter);
+  if (query) params.set("q", query);
+  const search = params.toString();
+  return search ? `/inventory?${search}` : "/inventory";
+}
+
+export default async function InventoryPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = (await searchParams) ?? {};
+  const activeFilter = normalizeInventoryFilter(params.filter);
+  const searchQuery = typeof params.q === "string" ? params.q.trim() : "";
   const supabase = await createClient();
   const {
     data: { user },
@@ -293,6 +341,25 @@ export default async function InventoryPage() {
       urgency: getStatus(item, stockOnHand(item), packState(item)) === "Out of stock" ? "Critical" : "High",
     }));
 
+  const visibleItems = items.filter((item) => {
+    const stock = stockOnHand(item);
+    const packs = packState(item);
+    const matchesFilter =
+      activeFilter === "all" ||
+      (activeFilter === "products" && item.inventory_type === "finished_product") ||
+      (activeFilter === "ingredients" && item.inventory_type === "raw_material") ||
+      (activeFilter === "low-stock" && getStatus(item, stock, packs) !== "In stock");
+
+    return matchesFilter && matchesInventorySearch(item, itemBatches(item.id), searchQuery);
+  });
+
+  const filters: Array<{ key: InventoryFilter; label: string; icon?: typeof Filter }> = [
+    { key: "all", label: "All items", icon: Filter },
+    { key: "products", label: "Products" },
+    { key: "ingredients", label: "Ingredients" },
+    { key: "low-stock", label: "Low stock" },
+  ];
+
   return (
     <AppShell userEmail={user.email}>
       <PageHeader
@@ -384,7 +451,7 @@ export default async function InventoryPage() {
         <StatCard label="Low stock" value={lowStockItems.toString()} meta="Needs reorder attention" />
         <StatCard label="Barcode ready" value={barcodeReady.toString()} meta="Items with a barcode value" />
         <StatCard label="Ingredients" value={ingredients.toString()} meta="Raw materials used in production" />
-        <StatCard label="Inventory value" value={formatMoney(inventoryValue, businessCurrency)} meta="Remaining batch value" />
+        <StatCard label="Inventory value" value={formatCompactMoney(inventoryValue, businessCurrency)} meta="Remaining batch value" />
         <StatCard label="Expiring soon" value={expiringSoon.toString()} meta="Batches within 30 days" />
       </section>
 
@@ -402,44 +469,45 @@ export default async function InventoryPage() {
               </div>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+            <form action="/inventory" className="grid gap-3 lg:grid-cols-[1fr_auto]">
+              <input type="hidden" name="filter" value={activeFilter} />
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
-                <Input className="pl-9" placeholder="Search item, brand, supplier, barcode" />
+                <Input
+                  className="pl-9"
+                  name="q"
+                  placeholder="Search item, brand, supplier, barcode"
+                  defaultValue={searchQuery}
+                />
               </div>
 
-            <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-4 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-alt)]"
-                >
-                  <Filter size={14} />
-                  All items
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-10 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-4 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-alt)]"
-                >
-                  Products
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-10 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-4 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-alt)]"
-                >
-                  Ingredients
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-10 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-4 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-alt)]"
-                >
-                  Low stock
-                </button>
+              <div className="flex flex-wrap gap-2">
+                {filters.map((filter) => {
+                  const Icon = filter.icon;
+                  const isActive = activeFilter === filter.key;
+
+                  return (
+                    <Link
+                      key={filter.key}
+                      href={filterButtonHref(filter.key, searchQuery)}
+                      className={cn(
+                        "inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-medium transition-colors",
+                        isActive
+                          ? "border-[var(--primary)] bg-[var(--surface)] text-[var(--primary)]"
+                          : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)] hover:bg-[var(--surface-alt)]"
+                      )}
+                    >
+                      {Icon ? <Icon size={14} /> : null}
+                      {filter.label}
+                    </Link>
+                  );
+                })}
               </div>
-            </div>
+            </form>
           </CardHeader>
 
           <CardContent>
-            {items.length > 0 ? (
+            {visibleItems.length > 0 ? (
               <>
                 <div className="hidden overflow-x-auto rounded-[var(--radius-md)] border border-[var(--border)] md:block">
                   <Table className="min-w-[1080px]">
@@ -456,7 +524,7 @@ export default async function InventoryPage() {
                       </TR>
                     </THead>
                     <TBody>
-                      {items.map((item) => {
+                      {visibleItems.map((item) => {
                         const stock = stockOnHand(item);
                         const packs = packState(item);
                         const status = getStatus(item, stock, packs);
@@ -580,7 +648,7 @@ export default async function InventoryPage() {
                 </div>
 
                 <div className="space-y-3 md:hidden">
-                  {items.map((item) => {
+                  {visibleItems.map((item) => {
                     const stock = stockOnHand(item);
                     const packs = packState(item);
                     const status = getStatus(item, stock, packs);
@@ -701,18 +769,29 @@ export default async function InventoryPage() {
               <Card className="border-dashed bg-[var(--surface-alt)] shadow-none">
                 <CardContent className="flex flex-col items-start gap-4 p-6 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <p className="text-base font-semibold">No inventory yet</p>
+                    <p className="text-base font-semibold">{items.length > 0 ? "No matching items" : "No inventory yet"}</p>
                     <p className="mt-1 text-sm text-[var(--muted)]">
-                      Add your first product or ingredient, then scan barcodes when you receive stock.
+                      {items.length > 0
+                        ? "Try another search term or switch back to All items."
+                        : "Add your first product or ingredient, then scan barcodes when you receive stock."}
                     </p>
                   </div>
-                  <Link
-                    href="/inventory/new"
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[var(--border)] !bg-[var(--primary)] px-4 text-sm font-medium !text-white transition-colors hover:!bg-[var(--primary-hover)]"
-                  >
-                    <ScanBarcode size={16} />
-                    Add first item
-                  </Link>
+                  {items.length > 0 ? (
+                    <Link
+                      href="/inventory"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-4 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-alt)]"
+                    >
+                      Clear filters
+                    </Link>
+                  ) : (
+                    <Link
+                      href="/inventory/new"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[var(--border)] !bg-[var(--primary)] px-4 text-sm font-medium !text-white transition-colors hover:!bg-[var(--primary-hover)]"
+                    >
+                      <ScanBarcode size={16} />
+                      Add first item
+                    </Link>
+                  )}
                 </CardContent>
               </Card>
             )}

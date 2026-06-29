@@ -42,19 +42,27 @@ export async function receiveInventoryStock(formData: FormData) {
   const packagesReceived = packagesReceivedRaw === "" ? null : parseNumber(packagesReceivedRaw);
   const packageSizeRaw = String(formData.get("package_size") ?? "").trim();
   const packageSize = packageSizeRaw === "" ? null : parseNumber(packageSizeRaw);
-  const quantityReceived = parseNumber(formData.get("quantity_on_hand"));
-  const costPerUnit = parseNumber(formData.get("cost_per_unit"));
+  const submittedQuantityReceived = parseNumber(formData.get("quantity_on_hand"));
+  const submittedCostPerUnit = parseNumber(formData.get("cost_per_unit"));
   const purchasePriceRaw = String(formData.get("purchase_price") ?? "").trim();
   const purchasePrice = purchasePriceRaw === "" ? null : parseNumber(purchasePriceRaw);
   const expirationDateRaw = String(formData.get("expiration_date") ?? "").trim();
   const notes = String(formData.get("notes") ?? "").trim();
 
-  if (!itemId || Number.isNaN(quantityReceived) || quantityReceived <= 0 || Number.isNaN(costPerUnit)) {
+  if (!itemId || Number.isNaN(submittedQuantityReceived) || submittedQuantityReceived <= 0 || Number.isNaN(submittedCostPerUnit)) {
     fail("Choose an item and enter a valid received quantity.");
   }
 
   if (Number.isNaN(packagesReceived) || Number.isNaN(packageSize) || Number.isNaN(purchasePrice)) {
     fail("Enter valid numbers for package details and purchase price.");
+  }
+
+  if (packagesReceived != null && packagesReceived <= 0) {
+    fail("Packages bought must be greater than zero.");
+  }
+
+  if (packageSize != null && packageSize <= 0) {
+    fail("Size per package must be greater than zero.");
   }
 
   const { data: item, error: itemError } = await supabase
@@ -85,6 +93,8 @@ export async function receiveInventoryStock(formData: FormData) {
   }
 
   const previousQuantity = parseNumber(item.quantity_on_hand);
+  const quantityReceived = packagesReceived != null && packageSize != null ? packagesReceived * packageSize : submittedQuantityReceived;
+  const costPerUnit = purchasePrice != null && quantityReceived > 0 ? purchasePrice / quantityReceived : submittedCostPerUnit;
   const newQuantity = previousQuantity + quantityReceived;
   const shouldSetDefaultPackage = item.default_package_size == null && packageSize != null && packageSize > 0;
 

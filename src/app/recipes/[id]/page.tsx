@@ -10,6 +10,7 @@ import { getCurrentBusiness, formatMoney, formatStock, toNumber } from "@/lib/in
 import { calculateRecipeCost } from "@/lib/recipes/costing";
 import { DeleteVariantButton } from "../delete-variant-button";
 import { RecipeVariantModal } from "../recipe-variant-modal";
+import { VariantStatusButton } from "../variant-status-button";
 
 type RecipeDetail = {
   id: string;
@@ -135,6 +136,7 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
   const currentYield = toNumber(detail.batch_yield);
   const yieldScenarios = Array.from(new Set([currentYield, Math.max(1, currentYield - 2), currentYield + 2])).sort((a, b) => a - b);
   const currentPrice = toNumber(detail.selling_price);
+  const recommendedProfitPerUnit = cost.recommendedPrice - cost.costPerUnit;
   const priceGap = cost.recommendedPrice - currentPrice;
   const pricingStatus =
     currentPrice <= 0
@@ -144,6 +146,159 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
         : priceGap < -1
           ? "Above target"
           : "On target";
+  const variantRows = (variants ?? []) as VariantRow[];
+  const activeVariants = variantRows.filter((variant) => variant.is_active);
+  const archivedVariants = variantRows.filter((variant) => !variant.is_active);
+
+  function renderVariantCard(variant: VariantRow) {
+    const extras = variantIngredientsById[variant.id] ?? [];
+    const extraCost = extras.reduce(
+      (total, ingredient) => {
+        const batchMultiplier = ingredient.usage_basis === "per_piece" ? toNumber(detail.batch_yield) : 1;
+        return total + toNumber(ingredient.quantity) * batchMultiplier * (inventoryCostById.get(ingredient.inventory_item_id) ?? 0);
+      },
+      0
+    );
+    const variantCost = calculateRecipeCost({
+      batchYield: toNumber(detail.batch_yield),
+      sellingPrice: toNumber(variant.selling_price),
+      packagingCost: toNumber(detail.packaging_cost),
+      laborCost: toNumber(detail.labor_cost),
+      overheadCost: toNumber(detail.overhead_cost),
+      ingredientCost: ingredientCost + extraCost,
+      targetMarginPercent: cost.targetMarginPercent,
+    });
+    const variantSellingPrice = toNumber(variant.selling_price);
+    const hasVariantSellingPrice = variantSellingPrice > 0;
+    const batchYield = toNumber(detail.batch_yield);
+    const batchPlanningPrice = hasVariantSellingPrice ? variantSellingPrice : variantCost.recommendedPrice;
+    const profitAtRecommendedPrice = variantCost.recommendedPrice - variantCost.costPerUnit;
+    const batchRevenue = batchPlanningPrice * batchYield;
+    const batchProfit = batchRevenue - variantCost.totalCost;
+
+    return (
+      <div key={variant.id} className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="font-semibold">{variant.name}</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">{variant.sku ?? "No SKU"}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className={variant.is_active ? "bg-emerald-50 text-emerald-700" : "bg-[var(--surface-alt)] text-[var(--muted)]"}>
+              {variant.is_active ? "Active" : "Archived"}
+            </Badge>
+            <RecipeVariantModal
+              recipeId={id}
+              inventoryItems={inventoryItems ?? []}
+              currency={currency}
+              variantId={variant.id}
+              triggerLabel="Edit"
+              initialVariant={{
+                name: variant.name,
+                sku: variant.sku,
+                selling_price: variant.selling_price,
+                notes: variant.notes,
+                ingredients: extras,
+              }}
+            />
+            <VariantStatusButton recipeId={id} variantId={variant.id} variantName={variant.name} isActive={variant.is_active} />
+            <DeleteVariantButton recipeId={id} variantId={variant.id} variantName={variant.name} />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-alt)] p-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold text-[var(--muted)]">Per piece profit</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Actual profit uses your selling price. If none is set, use the recommended price as the working target.
+              </p>
+            </div>
+            <p className={`text-lg font-semibold ${hasVariantSellingPrice && variantCost.profitPerUnit < 0 ? "text-red-600" : "text-[var(--foreground)]"}`}>
+              {hasVariantSellingPrice ? formatMoney(variantCost.profitPerUnit, currency) : formatMoney(profitAtRecommendedPrice, currency)}
+            </p>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <div>
+              <p className="text-xs text-[var(--muted)]">Selling / pc</p>
+              <p className="mt-1 font-semibold">{hasVariantSellingPrice ? formatMoney(variantSellingPrice, currency) : "Not priced"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">Cost / pc</p>
+              <p className="mt-1 font-semibold">{formatMoney(variantCost.costPerUnit, currency)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">Profit / pc</p>
+              <p className={`mt-1 font-semibold ${hasVariantSellingPrice && variantCost.profitPerUnit < 0 ? "text-red-600" : ""}`}>
+                {hasVariantSellingPrice ? formatMoney(variantCost.profitPerUnit, currency) : "Not priced"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">Profit at recommended</p>
+              <p className="mt-1 font-semibold">{formatMoney(profitAtRecommendedPrice, currency)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">Recommended / pc at {formatStock(variantCost.targetMarginPercent)}%</p>
+              <p className="mt-1 font-semibold">{formatMoney(variantCost.recommendedPrice, currency)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Batch cost</p>
+            <p className="mt-1 font-semibold">{formatMoney(variantCost.totalCost, currency)}</p>
+          </div>
+          <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">{hasVariantSellingPrice ? "Batch revenue" : "Est. batch revenue"}</p>
+            <p className="mt-1 font-semibold">{formatMoney(batchRevenue, currency)}</p>
+          </div>
+          <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">{hasVariantSellingPrice ? "Batch profit" : "Est. batch profit"}</p>
+            <p className={`mt-1 font-semibold ${batchProfit < 0 ? "text-red-600" : ""}`}>{formatMoney(batchProfit, currency)}</p>
+          </div>
+          <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Extra topping cost / batch</p>
+            <p className="mt-1 font-semibold">{formatMoney(extraCost, currency)}</p>
+          </div>
+          <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Recipe target margin</p>
+            <p className="mt-1 font-semibold">{formatStock(variantCost.targetMarginPercent)}%</p>
+          </div>
+        </div>
+
+        <p className="mt-3 rounded-[var(--radius-sm)] bg-[var(--surface-alt)] p-3 text-sm text-[var(--muted)]">
+          {hasVariantSellingPrice
+            ? `At ${formatMoney(variantSellingPrice, currency)} per piece, this variant earns ${formatMoney(variantCost.profitPerUnit, currency)} per piece or ${formatMoney(batchProfit, currency)} per batch after all tracked costs.`
+            : `No selling price is set yet. At the recommended ${formatMoney(variantCost.recommendedPrice, currency)} per piece, estimated profit is ${formatMoney(profitAtRecommendedPrice, currency)} per piece or ${formatMoney(batchProfit, currency)} per batch.`}
+        </p>
+
+        {extras.length > 0 ? (
+          <div className="mt-4 space-y-2">
+            {extras.map((ingredient) => (
+              <div key={ingredient.id} className="flex flex-col gap-1 rounded-[var(--radius-sm)] bg-[var(--surface-alt)] p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                <span className="font-medium">{inventoryLabelById.get(ingredient.inventory_item_id) ?? "Unknown item"}</span>
+                <span className="text-[var(--muted)]">
+                  {formatStock(toNumber(ingredient.input_quantity ?? ingredient.quantity))} {ingredient.input_unit ?? ingredient.unit}{" "}
+                  {ingredient.usage_basis === "per_piece" ? "per piece" : "per batch"} -{" "}
+                  {formatMoney(
+                    toNumber(ingredient.quantity) *
+                      (ingredient.usage_basis === "per_piece" ? toNumber(detail.batch_yield) : 1) *
+                      (inventoryCostById.get(ingredient.inventory_item_id) ?? 0),
+                    currency
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-4 rounded-[var(--radius-sm)] bg-[var(--surface-alt)] p-3 text-sm text-[var(--muted)]">
+            No extra ingredients. This variant uses the base recipe cost.
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <AppShell userEmail={user.email}>
@@ -180,7 +335,7 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
       <section className="mt-6 grid gap-4 md:grid-cols-4">
         <StatCard label="Batch cost" value={formatMoney(cost.totalCost, currency)} meta="All costs included" />
         <StatCard label="Cost / unit" value={formatMoney(cost.costPerUnit, currency)} meta={`Per ${detail.yield_unit}`} />
-        <StatCard label="Profit / unit" value={formatMoney(cost.profitPerUnit, currency)} meta={`Selling ${formatMoney(detail.selling_price, currency)}`} />
+        <StatCard label="Profit / unit" value={formatMoney(recommendedProfitPerUnit, currency)} meta={`Recommended ${formatMoney(cost.recommendedPrice, currency)}`} />
         <StatCard label="Target margin" value={`${cost.targetMarginPercent.toFixed(0)}%`} meta="Used for recommended price" />
       </section>
 
@@ -418,155 +573,32 @@ export default async function RecipeDetailPage({ params }: { params: Promise<{ i
             <RecipeVariantModal recipeId={id} inventoryItems={inventoryItems ?? []} currency={currency} />
           </CardHeader>
           <CardContent className="space-y-3">
-            {(variants ?? []).length > 0 ? (
-              ((variants ?? []) as VariantRow[]).map((variant) => {
-                const extras = variantIngredientsById[variant.id] ?? [];
-                const extraCost = extras.reduce(
-                  (total, ingredient) => {
-                    const batchMultiplier = ingredient.usage_basis === "per_piece" ? toNumber(detail.batch_yield) : 1;
-                    return total + toNumber(ingredient.quantity) * batchMultiplier * (inventoryCostById.get(ingredient.inventory_item_id) ?? 0);
-                  },
-                  0
-                );
-                const variantCost = calculateRecipeCost({
-                  batchYield: toNumber(detail.batch_yield),
-                  sellingPrice: toNumber(variant.selling_price),
-                  packagingCost: toNumber(detail.packaging_cost),
-                  laborCost: toNumber(detail.labor_cost),
-                  overheadCost: toNumber(detail.overhead_cost),
-                  ingredientCost: ingredientCost + extraCost,
-                  targetMarginPercent: cost.targetMarginPercent,
-                });
-                const variantSellingPrice = toNumber(variant.selling_price);
-                const hasVariantSellingPrice = variantSellingPrice > 0;
-                const batchYield = toNumber(detail.batch_yield);
-                const batchPlanningPrice = hasVariantSellingPrice ? variantSellingPrice : variantCost.recommendedPrice;
-                const profitAtRecommendedPrice = variantCost.recommendedPrice - variantCost.costPerUnit;
-                const batchRevenue = batchPlanningPrice * batchYield;
-                const batchProfit = batchRevenue - variantCost.totalCost;
-
-                return (
-                  <div key={variant.id} className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-4">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="font-semibold">{variant.name}</p>
-                        <p className="mt-1 text-xs text-[var(--muted)]">{variant.sku ?? "No SKU"}</p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge className={variant.is_active ? "bg-emerald-50 text-emerald-700" : "bg-[var(--surface-alt)] text-[var(--muted)]"}>
-                          {variant.is_active ? "Active" : "Archived"}
-                        </Badge>
-                        <RecipeVariantModal
-                          recipeId={id}
-                          inventoryItems={inventoryItems ?? []}
-                          currency={currency}
-                          variantId={variant.id}
-                          triggerLabel="Edit"
-                          initialVariant={{
-                            name: variant.name,
-                            sku: variant.sku,
-                            selling_price: variant.selling_price,
-                            notes: variant.notes,
-                            ingredients: extras,
-                          }}
-                        />
-                        <DeleteVariantButton recipeId={id} variantId={variant.id} variantName={variant.name} />
-                      </div>
-                    </div>
-
-                    <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-alt)] p-3">
-                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="text-xs font-semibold text-[var(--muted)]">Per piece profit</p>
-                          <p className="mt-1 text-sm text-[var(--muted)]">
-                            Actual profit uses your selling price. If none is set, use the recommended price as the working target.
-                          </p>
-                        </div>
-                        <p className={`text-lg font-semibold ${hasVariantSellingPrice && variantCost.profitPerUnit < 0 ? "text-red-600" : "text-[var(--foreground)]"}`}>
-                          {hasVariantSellingPrice ? formatMoney(variantCost.profitPerUnit, currency) : formatMoney(profitAtRecommendedPrice, currency)}
-                        </p>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-                        <div>
-                          <p className="text-xs text-[var(--muted)]">Selling / pc</p>
-                          <p className="mt-1 font-semibold">{hasVariantSellingPrice ? formatMoney(variantSellingPrice, currency) : "Not priced"}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-[var(--muted)]">Cost / pc</p>
-                          <p className="mt-1 font-semibold">{formatMoney(variantCost.costPerUnit, currency)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-[var(--muted)]">Profit / pc</p>
-                          <p className={`mt-1 font-semibold ${hasVariantSellingPrice && variantCost.profitPerUnit < 0 ? "text-red-600" : ""}`}>
-                            {hasVariantSellingPrice ? formatMoney(variantCost.profitPerUnit, currency) : "Not priced"}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-[var(--muted)]">Profit at recommended</p>
-                          <p className="mt-1 font-semibold">{formatMoney(profitAtRecommendedPrice, currency)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-[var(--muted)]">Recommended / pc at {formatStock(variantCost.targetMarginPercent)}%</p>
-                          <p className="mt-1 font-semibold">{formatMoney(variantCost.recommendedPrice, currency)}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                      <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
-                        <p className="text-xs text-[var(--muted)]">Batch cost</p>
-                        <p className="mt-1 font-semibold">{formatMoney(variantCost.totalCost, currency)}</p>
-                      </div>
-                      <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
-                        <p className="text-xs text-[var(--muted)]">{hasVariantSellingPrice ? "Batch revenue" : "Est. batch revenue"}</p>
-                        <p className="mt-1 font-semibold">{formatMoney(batchRevenue, currency)}</p>
-                      </div>
-                      <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
-                        <p className="text-xs text-[var(--muted)]">{hasVariantSellingPrice ? "Batch profit" : "Est. batch profit"}</p>
-                        <p className={`mt-1 font-semibold ${batchProfit < 0 ? "text-red-600" : ""}`}>{formatMoney(batchProfit, currency)}</p>
-                      </div>
-                      <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
-                        <p className="text-xs text-[var(--muted)]">Extra topping cost / batch</p>
-                        <p className="mt-1 font-semibold">{formatMoney(extraCost, currency)}</p>
-                      </div>
-                      <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3">
-                        <p className="text-xs text-[var(--muted)]">Recipe target margin</p>
-                        <p className="mt-1 font-semibold">{formatStock(variantCost.targetMarginPercent)}%</p>
-                      </div>
-                    </div>
-
-                    <p className="mt-3 rounded-[var(--radius-sm)] bg-[var(--surface-alt)] p-3 text-sm text-[var(--muted)]">
-                      {hasVariantSellingPrice
-                        ? `At ${formatMoney(variantSellingPrice, currency)} per piece, this variant earns ${formatMoney(variantCost.profitPerUnit, currency)} per piece or ${formatMoney(batchProfit, currency)} per batch after all tracked costs.`
-                        : `No selling price is set yet. At the recommended ${formatMoney(variantCost.recommendedPrice, currency)} per piece, estimated profit is ${formatMoney(profitAtRecommendedPrice, currency)} per piece or ${formatMoney(batchProfit, currency)} per batch.`}
-                    </p>
-
-                    {extras.length > 0 ? (
-                      <div className="mt-4 space-y-2">
-                        {extras.map((ingredient) => (
-                          <div key={ingredient.id} className="flex flex-col gap-1 rounded-[var(--radius-sm)] bg-[var(--surface-alt)] p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                            <span className="font-medium">{inventoryLabelById.get(ingredient.inventory_item_id) ?? "Unknown item"}</span>
-                            <span className="text-[var(--muted)]">
-                              {formatStock(toNumber(ingredient.input_quantity ?? ingredient.quantity))} {ingredient.input_unit ?? ingredient.unit}{" "}
-                              {ingredient.usage_basis === "per_piece" ? "per piece" : "per batch"} -{" "}
-                              {formatMoney(
-                                toNumber(ingredient.quantity) *
-                                  (ingredient.usage_basis === "per_piece" ? toNumber(detail.batch_yield) : 1) *
-                                  (inventoryCostById.get(ingredient.inventory_item_id) ?? 0),
-                                currency
-                              )}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="mt-4 rounded-[var(--radius-sm)] bg-[var(--surface-alt)] p-3 text-sm text-[var(--muted)]">
-                        No extra ingredients. This variant uses the base recipe cost.
-                      </p>
-                    )}
+            {variantRows.length > 0 ? (
+              <>
+                {activeVariants.length > 0 ? (
+                  activeVariants.map((variant) => renderVariantCard(variant))
+                ) : (
+                  <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--border)] bg-[var(--surface-alt)] p-5">
+                    <p className="font-semibold">No active variants</p>
+                    <p className="mt-1 text-sm text-[var(--muted)]">Reactivate an archived variant or add a new one to use it in production and products.</p>
                   </div>
-                );
-              })
+                )}
+
+                {archivedVariants.length > 0 ? (
+                  <details className="group mt-4 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-alt)]">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4">
+                      <div>
+                        <p className="font-semibold">Archived variants</p>
+                        <p className="mt-1 text-sm text-[var(--muted)]">{archivedVariants.length} hidden from production, products, and sales dropdowns.</p>
+                      </div>
+                      <Badge className="bg-[var(--surface)] text-[var(--muted)]">Click to expand</Badge>
+                    </summary>
+                    <div className="space-y-3 border-t border-[var(--border)] p-4">
+                      {archivedVariants.map((variant) => renderVariantCard(variant))}
+                    </div>
+                  </details>
+                ) : null}
+              </>
             ) : (
               <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--border)] bg-[var(--surface-alt)] p-5">
                 <p className="font-semibold">No variants yet</p>

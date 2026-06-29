@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import {
   daysUntil,
+  formatCompactMoney,
   formatMoney,
   formatPhilippineDate,
   formatPhilippineDateTime,
@@ -42,6 +43,15 @@ function movementLabel(type: string) {
   }
 }
 
+function formatPackCount(value: number) {
+  return `${formatStock(value)} ${value === 1 ? "pack" : "packs"}`;
+}
+
+function movementPackCount(quantity: number, packageSize: number) {
+  if (packageSize <= 0) return null;
+  return Math.abs(quantity) / packageSize;
+}
+
 export default async function InventoryItemDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, user, businessId, currency } = await getCurrentBusiness();
@@ -65,7 +75,7 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
       .order("expiration_date", { ascending: true, nullsFirst: false }),
     supabase
       .from("inventory_movements")
-      .select("id, movement_type, quantity, previous_quantity, new_quantity, reason, created_at")
+      .select("id, movement_type, quantity, previous_quantity, new_quantity, reason, reference_id, created_at")
       .eq("inventory_item_id", id)
       .eq("business_id", businessId)
       .order("created_at", { ascending: false })
@@ -89,9 +99,14 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
   const averageCost = stock > 0 ? valuation / stock : toNumber(item.cost_per_unit);
   const sealedPacks = activeBatches.reduce((total, batch) => total + toNumber(batch.sealed_packs_remaining), 0);
   const openPacks = activeBatches.reduce((total, batch) => total + toNumber(batch.open_packs), 0);
+  const activePacks = sealedPacks + openPacks;
   const emptiedPacks = (batches ?? []).reduce((total, batch) => total + toNumber(batch.emptied_packs), 0);
   const packThreshold = toNumber(item.low_stock_pack_threshold);
   const packStatus = packThreshold > 0 && sealedPacks + openPacks <= packThreshold ? "Low packs" : "Pack stock ok";
+  const batchesById = (batches ?? []).reduce<Record<string, { package_size: string | number | null }>>((grouped, batch) => {
+    grouped[batch.id] = batch;
+    return grouped;
+  }, {});
 
   return (
     <AppShell userEmail={user.email}>
@@ -126,9 +141,9 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
       />
 
       <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Current stock" value={`${formatStock(stock)} ${item.unit}`} meta={`Min ${formatStock(threshold)} ${item.unit}`} />
+        <StatCard label="Current stock" value={formatPackCount(activePacks)} meta={`${formatStock(stock)} ${item.unit} usable quantity`} />
         <StatCard label="Pack state" value={`${formatStock(sealedPacks)} sealed`} meta={`${formatStock(openPacks)} open / ${formatStock(emptiedPacks)} empty`} />
-        <StatCard label="Inventory value" value={formatMoney(valuation, currency)} meta="Remaining batch value" />
+        <StatCard label="Inventory value" value={formatCompactMoney(valuation, currency)} meta={`${formatMoney(valuation, currency)} exact`} />
         <StatCard label="Average cost" value={formatMoney(averageCost, currency)} meta={`Per ${item.unit}`} />
         <StatCard label="Expiring soon" value={expiringSoon.length.toString()} meta="Batches within 30 days" />
       </section>
@@ -152,7 +167,8 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
                     <TH>Packs</TH>
                     <TH>Expiry</TH>
                     <TH>Vendor</TH>
-                    <TH>Cost</TH>
+                    <TH>Price</TH>
+                    <TH>Cost/unit</TH>
                     <TH>Action</TH>
                   </TR>
                 </THead>
@@ -172,6 +188,7 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
                         </div>
                       </TD>
                       <TD>{batch.supplier_name ?? "Not set"}</TD>
+                      <TD>{batch.purchase_price != null ? formatMoney(batch.purchase_price, currency) : "Not set"}</TD>
                       <TD>{formatMoney(batch.cost_per_unit, currency)}</TD>
                       <TD>
                         <Link href={`/inventory/${item.id}/batches/${batch.id}/edit`} className="inline-flex h-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-alt)]">
@@ -188,8 +205,11 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
                 <div key={batch.id} className="rounded-[var(--radius-sm)] border border-[var(--border)] p-3">
                   <div className="flex items-center justify-between gap-3">
                     <p className="font-medium">{formatStock(toNumber(batch.quantity_remaining))} {item.unit}</p>
-                    <Badge>{formatMoney(batch.cost_per_unit, currency)}</Badge>
+                    <Badge>{formatMoney(batch.cost_per_unit, currency)} / {item.unit}</Badge>
                   </div>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    Price paid: {batch.purchase_price != null ? formatMoney(batch.purchase_price, currency) : "Not set"}
+                  </p>
                   <p className="mt-1 text-xs text-[var(--muted)]">Received {formatPhilippineDate(batch.received_at)}</p>
                   <p className="mt-1 text-xs text-[var(--muted)]">
                     {formatStock(toNumber(batch.sealed_packs_remaining))} sealed / {formatStock(toNumber(batch.open_packs))} open / {formatStock(toNumber(batch.emptied_packs))} empty
@@ -227,18 +247,33 @@ export default async function InventoryItemDetailPage({ params }: { params: Prom
               <CardTitle className="text-lg">Movement history</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {(movements ?? []).map((movement) => (
-                <div key={movement.id} className="flex items-start justify-between gap-3 rounded-[var(--radius-sm)] border border-[var(--border)] p-3">
-                  <div>
-                    <p className="text-sm font-medium">{movementLabel(movement.movement_type)}</p>
-                    <p className="mt-1 text-xs text-[var(--muted)]">{movement.reason ?? "No notes"}</p>
+              {(movements ?? []).map((movement) => {
+                const movementQuantity = toNumber(movement.quantity);
+                const movementBatch = movement.reference_id ? batchesById[movement.reference_id] : null;
+                const packSize = toNumber(movementBatch?.package_size ?? item.default_package_size);
+                const packsMoved = movementPackCount(movementQuantity, packSize);
+
+                return (
+                  <div key={movement.id} className="rounded-[var(--radius-sm)] border border-[var(--border)] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{movementLabel(movement.movement_type)}</p>
+                        <p className="mt-1 text-xs text-[var(--muted)]">{movement.reason ?? "No notes"}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-medium">{formatStock(movementQuantity)} {item.unit}</p>
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          {packsMoved != null ? formatPackCount(packsMoved) : "Pack count unavailable"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted)]">
+                      <span>Current total: {formatStock(toNumber(movement.new_quantity))} {item.unit}</span>
+                      <span>{formatPhilippineDateTime(movement.created_at)}</span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-medium">{formatStock(toNumber(movement.quantity))}</p>
-                    <p className="mt-1 text-xs text-[var(--muted)]">{formatPhilippineDateTime(movement.created_at)}</p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </CardContent>
           </Card>
         </div>

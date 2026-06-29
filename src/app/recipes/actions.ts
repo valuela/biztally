@@ -47,6 +47,7 @@ export async function createRecipe(formData: FormData) {
   }
 
   const ingredientIds = formData.getAll("ingredient_inventory_item_id").map((value) => String(value).trim());
+  const ingredientNames = formData.getAll("ingredient_name").map((value) => String(value).trim());
   const inputQuantities = formData.getAll("ingredient_quantity").map((value) => parseNumber(value));
   const inputUnits = formData.getAll("ingredient_unit").map((value) => String(value ?? "").trim());
   const notesList = formData.getAll("ingredient_notes").map((value) => String(value ?? "").trim());
@@ -54,6 +55,8 @@ export async function createRecipe(formData: FormData) {
   const recipeIngredients = ingredientIds
     .map((inventoryItemId, index) => ({
       inventoryItemId,
+      ingredientName: ingredientNames[index] || `Ingredient ${index + 1}`,
+      lineNumber: index + 1,
       inputQuantity: inputQuantities[index],
       inputUnit: inputUnits[index],
       notes: notesList[index] || null,
@@ -76,8 +79,13 @@ export async function createRecipe(formData: FormData) {
   if (inventoryError) fail(inventoryError.message || "Could not validate recipe ingredients.");
 
   const inventoryItemById = new Map((inventoryItems ?? []).map((item) => [item.id, item]));
-  if (inventoryItemById.size !== recipeIngredients.length) {
-    fail("One or more selected ingredients could not be found.");
+  const missingIngredients = recipeIngredients.filter((ingredient) => !inventoryItemById.has(ingredient.inventoryItemId));
+  if (missingIngredients.length > 0) {
+    fail(
+      `Could not find: ${missingIngredients
+        .map((ingredient) => `${ingredient.ingredientName} (line ${ingredient.lineNumber})`)
+        .join(", ")}. Re-select ${missingIngredients.length === 1 ? "this ingredient" : "these ingredients"} and try again.`
+    );
   }
 
   const convertedIngredients = recipeIngredients.map((ingredient) => {
@@ -204,6 +212,16 @@ export async function updateRecipe(recipeId: string, formData: FormData) {
     failCurrent("Recipe was not found.");
   }
 
+  const { data: existingIngredientRows, error: existingIngredientError } = await supabase
+    .from("recipe_ingredients")
+    .select("id")
+    .eq("recipe_id", recipeId)
+    .eq("business_id", businessId);
+
+  if (existingIngredientError) {
+    failCurrent(existingIngredientError.message || "Could not load current recipe ingredients.");
+  }
+
   const ingredientIds = formData.getAll("ingredient_inventory_item_id").map((value) => String(value).trim());
   const inputQuantities = formData.getAll("ingredient_quantity").map((value) => parseNumber(value));
   const inputUnits = formData.getAll("ingredient_unit").map((value) => String(value ?? "").trim());
@@ -234,7 +252,7 @@ export async function updateRecipe(recipeId: string, formData: FormData) {
   if (inventoryError) failCurrent(inventoryError.message || "Could not validate recipe ingredients.");
 
   const inventoryItemById = new Map((inventoryItems ?? []).map((item) => [item.id, item]));
-  if (inventoryItemById.size !== recipeIngredients.length) {
+  if (recipeIngredients.some((ingredient) => !inventoryItemById.has(ingredient.inventoryItemId))) {
     failCurrent("One or more selected ingredients could not be found.");
   }
 
@@ -294,16 +312,6 @@ export async function updateRecipe(recipeId: string, formData: FormData) {
     failCurrent(updateError.message || "Could not update this recipe.");
   }
 
-  const { error: deleteError } = await supabase
-    .from("recipe_ingredients")
-    .delete()
-    .eq("recipe_id", recipeId)
-    .eq("business_id", businessId);
-
-  if (deleteError) {
-    failCurrent(deleteError.message || "Could not replace recipe ingredients.");
-  }
-
   const ingredientRows = convertedIngredients.map((ingredient, index) => ({
     business_id: businessId,
     recipe_id: recipeId,
@@ -316,10 +324,27 @@ export async function updateRecipe(recipeId: string, formData: FormData) {
     notes: ingredient.notes,
   }));
 
-  const { error: ingredientError } = await supabase.from("recipe_ingredients").insert(ingredientRows);
+  const { data: insertedIngredientRows, error: ingredientError } = await supabase.from("recipe_ingredients").insert(ingredientRows).select("id");
 
   if (ingredientError) {
     failCurrent(ingredientError.message || "Could not save recipe ingredients.");
+  }
+
+  const previousIngredientIds = (existingIngredientRows ?? []).map((ingredient) => ingredient.id);
+  if (previousIngredientIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("recipe_ingredients")
+      .delete()
+      .eq("business_id", businessId)
+      .in("id", previousIngredientIds);
+
+    if (deleteError) {
+      const insertedIds = (insertedIngredientRows ?? []).map((ingredient) => ingredient.id);
+      if (insertedIds.length > 0) {
+        await supabase.from("recipe_ingredients").delete().eq("business_id", businessId).in("id", insertedIds);
+      }
+      failCurrent(deleteError.message || "Could not replace recipe ingredients. Existing ingredients were preserved.");
+    }
   }
 
   revalidatePath("/recipes");
@@ -385,7 +410,7 @@ export async function createRecipeVariant(recipeId: string, formData: FormData) 
   if (inventoryError) failCurrent(inventoryError.message || "Could not validate variant ingredients.");
 
   const inventoryItemById = new Map((inventoryItems ?? []).map((item) => [item.id, item]));
-  if (inventoryItemById.size !== variantIngredients.length) {
+  if (variantIngredients.some((ingredient) => !inventoryItemById.has(ingredient.inventoryItemId))) {
     failCurrent("One or more selected variant ingredients could not be found.");
   }
 
@@ -478,6 +503,16 @@ export async function updateRecipeVariant(recipeId: string, variantId: string, f
     failCurrent("Variant was not found.");
   }
 
+  const { data: existingVariantIngredientRows, error: existingVariantIngredientError } = await supabase
+    .from("recipe_variant_ingredients")
+    .select("id")
+    .eq("recipe_variant_id", variantId)
+    .eq("business_id", businessId);
+
+  if (existingVariantIngredientError) {
+    failCurrent(existingVariantIngredientError.message || "Could not load current variant ingredients.");
+  }
+
   const ingredientIds = formData.getAll("variant_inventory_item_id").map((value) => String(value).trim());
   const inputQuantities = formData.getAll("variant_quantity").map((value) => parseNumber(value));
   const inputUnits = formData.getAll("variant_unit").map((value) => String(value ?? "").trim());
@@ -508,7 +543,7 @@ export async function updateRecipeVariant(recipeId: string, variantId: string, f
   if (inventoryError) failCurrent(inventoryError.message || "Could not validate variant ingredients.");
 
   const inventoryItemById = new Map((inventoryItems ?? []).map((item) => [item.id, item]));
-  if (inventoryItemById.size !== variantIngredients.length) {
+  if (variantIngredients.some((ingredient) => !inventoryItemById.has(ingredient.inventoryItemId))) {
     failCurrent("One or more selected variant ingredients could not be found.");
   }
 
@@ -546,34 +581,45 @@ export async function updateRecipeVariant(recipeId: string, variantId: string, f
     failCurrent(variantError?.message || "Could not update this recipe variant.");
   }
 
-  const { error: deleteError } = await supabase
-    .from("recipe_variant_ingredients")
-    .delete()
-    .eq("recipe_variant_id", variantId)
-    .eq("business_id", businessId);
-
-  if (deleteError) {
-    failCurrent(deleteError.message || "Could not replace variant ingredients.");
-  }
-
+  let insertedVariantIngredientIds: string[] = [];
   if (convertedIngredients.length > 0) {
-    const { error: ingredientError } = await supabase.from("recipe_variant_ingredients").insert(
-      convertedIngredients.map((ingredient, index) => ({
-        business_id: businessId,
-        recipe_variant_id: variantId,
-        inventory_item_id: ingredient.inventoryItemId,
-        input_quantity: ingredient.inputQuantity,
-        input_unit: ingredient.inputUnit || ingredient.inventoryUnit,
-        quantity: ingredient.convertedQuantity,
-        unit: ingredient.inventoryUnit,
-        usage_basis: ingredient.usageBasis,
-        sort_order: index,
-        notes: ingredient.notes,
-      }))
-    );
+    const { data: insertedRows, error: ingredientError } = await supabase
+      .from("recipe_variant_ingredients")
+      .insert(
+        convertedIngredients.map((ingredient, index) => ({
+          business_id: businessId,
+          recipe_variant_id: variantId,
+          inventory_item_id: ingredient.inventoryItemId,
+          input_quantity: ingredient.inputQuantity,
+          input_unit: ingredient.inputUnit || ingredient.inventoryUnit,
+          quantity: ingredient.convertedQuantity,
+          unit: ingredient.inventoryUnit,
+          usage_basis: ingredient.usageBasis,
+          sort_order: index,
+          notes: ingredient.notes,
+        }))
+      )
+      .select("id");
 
     if (ingredientError) {
       failCurrent(ingredientError.message || "Could not save variant ingredients.");
+    }
+    insertedVariantIngredientIds = (insertedRows ?? []).map((ingredient) => ingredient.id);
+  }
+
+  const previousVariantIngredientIds = (existingVariantIngredientRows ?? []).map((ingredient) => ingredient.id);
+  if (previousVariantIngredientIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("recipe_variant_ingredients")
+      .delete()
+      .eq("business_id", businessId)
+      .in("id", previousVariantIngredientIds);
+
+    if (deleteError) {
+      if (insertedVariantIngredientIds.length > 0) {
+        await supabase.from("recipe_variant_ingredients").delete().eq("business_id", businessId).in("id", insertedVariantIngredientIds);
+      }
+      failCurrent(deleteError.message || "Could not replace variant ingredients. Existing ingredients were preserved.");
     }
   }
 
@@ -601,4 +647,32 @@ export async function deleteRecipeVariant(recipeId: string, variantId: string) {
 
   revalidatePath(`/recipes/${recipeId}`);
   redirect(`/recipes/${recipeId}?success=${encodeURIComponent("Variant deleted.")}`);
+}
+
+export async function toggleRecipeVariantStatus(recipeId: string, variantId: string, isActive: boolean) {
+  const { supabase, businessId } = await getCurrentBusiness();
+
+  if (!businessId) {
+    failVariant(recipeId, "No business is linked to this account yet.");
+  }
+
+  const { error } = await supabase
+    .from("recipe_variants")
+    .update({
+      is_active: !isActive,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", variantId)
+    .eq("recipe_id", recipeId)
+    .eq("business_id", businessId);
+
+  if (error) {
+    failVariant(recipeId, error.message || "Could not update this variant status.");
+  }
+
+  revalidatePath(`/recipes/${recipeId}`);
+  revalidatePath("/products");
+  revalidatePath("/production");
+  revalidatePath("/sales");
+  redirect(`/recipes/${recipeId}?success=${encodeURIComponent(`Variant ${isActive ? "archived" : "reactivated"}.`)}`);
 }

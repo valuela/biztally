@@ -49,8 +49,8 @@ export async function createInventoryItem(formData: FormData) {
   const packagesReceived = packagesReceivedRaw === "" ? null : parseNumber(packagesReceivedRaw);
   const packageSizeRaw = String(formData.get("package_size") ?? "").trim();
   const packageSize = packageSizeRaw === "" ? null : parseNumber(packageSizeRaw);
-  const quantityOnHand = parseNumber(formData.get("quantity_on_hand"));
-  const costPerUnit = parseNumber(formData.get("cost_per_unit"));
+  const submittedQuantityOnHand = parseNumber(formData.get("quantity_on_hand"));
+  const submittedCostPerUnit = parseNumber(formData.get("cost_per_unit"));
   const purchasePriceRaw = String(formData.get("purchase_price") ?? "").trim();
   const purchasePrice = purchasePriceRaw === "" ? null : parseNumber(purchasePriceRaw);
   const lowStockThresholdRaw = String(formData.get("low_stock_threshold") ?? "").trim();
@@ -58,13 +58,24 @@ export async function createInventoryItem(formData: FormData) {
   const expirationDateRaw = String(formData.get("expiration_date") ?? "").trim();
   const notes = String(formData.get("notes") ?? "").trim();
 
-  if (!name || !inventoryType || !unit || Number.isNaN(quantityOnHand) || Number.isNaN(costPerUnit)) {
+  if (!name || !inventoryType || !unit || Number.isNaN(submittedQuantityOnHand) || Number.isNaN(submittedCostPerUnit)) {
     fail("Fill in the required fields before saving.");
   }
 
   if (Number.isNaN(packagesReceived) || Number.isNaN(packageSize) || Number.isNaN(purchasePrice) || Number.isNaN(lowStockThreshold)) {
     fail("Enter valid numbers for package details, purchase price, and low stock threshold.");
   }
+
+  if (packagesReceived != null && packagesReceived <= 0) {
+    fail("Packages bought must be greater than zero.");
+  }
+
+  if (packageSize != null && packageSize <= 0) {
+    fail("Size per package must be greater than zero.");
+  }
+
+  const quantityOnHand = packagesReceived != null && packageSize != null ? packagesReceived * packageSize : submittedQuantityOnHand;
+  const costPerUnit = purchasePrice != null && quantityOnHand > 0 ? purchasePrice / quantityOnHand : submittedCostPerUnit;
 
   if (!["raw_material", "packaging", "finished_product", "supply"].includes(inventoryType)) {
     fail("Choose a valid inventory type.");
